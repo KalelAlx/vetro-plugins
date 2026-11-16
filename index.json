@@ -101,8 +101,8 @@
         "exec"
       ],
       "url": "dist/tv-reboot-1.0.0.vplugin",
-      "sha256": "a3056bbf7218042ef153bd6aaa99c3f85b0bdd5597642f4b8c17761b12d6f1ff",
-      "size": 8868
+      "sha256": "4677a4ef86416289465ae7eb80fd37478c12b130423c26ed2e530dbccc2853d9",
+      "size": 9105
     },
     {
       "id": "tv-uptime",
