@@ -1,0 +1,1348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Keyboard &amp; Remote</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --surface: #181b21;
+  --raised: #20242c;
+  --border: #2c323d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --action: #58a6ff;
+  --action-hover: #79b8ff;
+  --danger: #f85149;
+  --danger-hover: #ff7b72;
+  --danger-soft: rgba(248, 81, 73, .12);
+  --danger-line: rgba(248, 81, 73, .35);
+  --warn: #d29922;
+  --warn-soft: rgba(210, 153, 34, .12);
+  --warn-line: rgba(210, 153, 34, .35);
+  --success: #3fb950;
+  --link: #58a6ff;
+  --focus: #388bfd;
+  --r: 8px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px;
+  --fs-s: .85rem; --fs-m: .95rem; --fs-l: 1.1rem;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  padding: var(--s3);
+  font-size: var(--fs-m);
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+}
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.app-layout {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+@media (min-width: 860px) {
+  .app-layout {
+    display: grid;
+    grid-template-columns: minmax(320px, 1.25fr) minmax(280px, 1fr);
+    gap: var(--s3);
+    align-items: start;
+  }
+}
+
+.col-main, .col-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: var(--s3);
+}
+
+.box-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: var(--s2);
+}
+.box-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  gap: var(--s2);
+}
+.box-title-clickable {
+  cursor: pointer;
+  user-select: none;
+}
+.box-title-row h2 {
+  font-size: var(--fs-l);
+  font-weight: 600;
+  margin: 0;
+  white-space: nowrap;
+}
+.header-notice {
+  color: var(--muted);
+  font-size: var(--fs-s);
+  margin: 0;
+  line-height: 1.3;
+}
+.box-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-shrink: 0;
+}
+
+.status-badge {
+  font-size: .8rem;
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: 12px;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.status-badge.ok {
+  background: rgba(127, 203, 160, .14);
+  border-color: rgba(127, 203, 160, .4);
+  color: #7fcba0;
+}
+.status-badge.warn {
+  background: var(--warn-soft);
+  border-color: var(--warn-line);
+  color: var(--warn);
+}
+.status-badge.err {
+  background: var(--danger-soft);
+  border-color: var(--danger-line);
+  color: var(--danger);
+}
+.status-badge.busy {
+  background: rgba(143, 186, 255, .14);
+  border-color: rgba(143, 186, 255, .4);
+  color: var(--link);
+}
+
+.btn-collapse {
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  border-radius: var(--r);
+  background: var(--raised);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.btn-collapse:hover {
+  background: var(--border);
+  color: var(--text);
+}
+.btn-collapse svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform .2s ease;
+}
+
+#box-screen.is-collapsed .btn-collapse svg,
+#box-keyboard.is-collapsed .btn-collapse svg,
+#box-playback.is-collapsed .btn-collapse svg {
+  transform: rotate(-90deg);
+}
+#box-screen.is-collapsed #screen-body,
+#box-keyboard.is-collapsed #keyboard-body,
+#box-playback.is-collapsed #playback-body {
+  display: none;
+}
+#box-screen.is-collapsed,
+#box-keyboard.is-collapsed,
+#box-playback.is-collapsed {
+  padding-bottom: var(--s2);
+}
+#box-screen.is-collapsed .box-header,
+#box-keyboard.is-collapsed .box-header,
+#box-playback.is-collapsed .box-header {
+  margin-bottom: 0;
+}
+#box-screen.is-collapsed .header-notice,
+#box-keyboard.is-collapsed .header-notice,
+#box-playback.is-collapsed .header-notice {
+  display: none;
+}
+
+.notice {
+  color: var(--muted);
+  font-size: var(--fs-s);
+  margin-bottom: var(--s2);
+}
+.kbd {
+  display: inline-block;
+  padding: 1px 5px;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .8rem;
+  color: var(--text);
+}
+.sec {
+  font-size: .75rem;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-top: var(--s3);
+  margin-bottom: var(--s2);
+}
+
+button {
+  background: var(--raised);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-s);
+  font-weight: 500;
+  padding: var(--s2) var(--s3);
+  border-radius: var(--r);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s1);
+  min-height: 40px;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background .12s, border-color .12s, transform .05s;
+}
+button:hover { background: #262b34; border-color: #3b4250; }
+button:active { background: #1c2027; transform: scale(.98); }
+button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+button.primary {
+  background: var(--action);
+  color: #0b1118;
+  border-color: var(--action);
+  font-weight: 600;
+}
+button.primary:hover { background: var(--action-hover); border-color: var(--action-hover); }
+
+button.danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border-color: var(--danger-line);
+}
+button.danger:hover { background: rgba(248, 81, 73, .22); }
+
+.input-row {
+  display: flex;
+  gap: var(--s2);
+  align-items: stretch;
+  margin-bottom: var(--s2);
+}
+.input-row input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-m);
+  padding: var(--s2) var(--s3);
+  min-height: 40px;
+  min-width: 0;
+}
+.input-row input:focus { outline: 2px solid var(--focus); outline-offset: -1px; }
+.input-btns {
+  display: flex;
+  gap: var(--s1);
+}
+
+#cert-banner {
+  display: none;
+  background: var(--warn-soft);
+  border: 1px solid var(--warn-line);
+  border-radius: var(--r);
+  padding: var(--s3);
+  margin-bottom: var(--s3);
+  font-size: var(--fs-s);
+}
+.cert-url-bar {
+  display: flex;
+  gap: var(--s1);
+  margin-bottom: var(--s2);
+}
+.cert-url-bar input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  color: var(--text);
+  font-size: .8rem;
+  padding: 4px 8px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+.cert-btn-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s1);
+}
+.cert-btn-bar button, .cert-btn-bar a button {
+  min-height: 32px;
+  padding: 4px 10px;
+  font-size: .8rem;
+}
+
+.dpad-cluster {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--s2);
+  max-width: 340px;
+  margin: var(--s2) auto var(--s3);
+}
+.dpad-cluster button {
+  height: 48px;
+  font-size: var(--fs-m);
+}
+.dpad-ok {
+  font-weight: 700 !important;
+}
+
+.rocker-section {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: var(--s2);
+  margin-bottom: var(--s3);
+  max-width: 340px;
+  margin-left: auto;
+  margin-right: auto;
+  align-items: stretch;
+}
+.rocker-pill {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: var(--s1);
+  gap: var(--s1);
+  align-items: stretch;
+}
+.rocker-pill button {
+  height: 40px;
+  padding: 0;
+  font-size: var(--fs-m);
+}
+.rocker-tag {
+  font-size: .7rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-align: center;
+  padding: 2px 0;
+  letter-spacing: .05em;
+}
+.center-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  justify-content: space-between;
+  height: 100%;
+}
+.center-stack button {
+  flex: 1;
+  min-height: 40px;
+  font-size: var(--fs-s);
+}
+
+.grid-4 {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--s2);
+}
+@media (min-width: 480px) {
+  .grid-4 { grid-template-columns: repeat(4, 1fr); }
+}
+.grid-4 button {
+  height: 40px;
+  font-size: var(--fs-s);
+}
+
+.numpad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--s2);
+  max-width: 260px;
+  margin: var(--s2) auto 0;
+}
+.numpad button {
+  height: 44px;
+  font-size: var(--fs-l);
+  font-weight: 600;
+}
+
+.media-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--s2);
+}
+.media-grid button {
+  height: 42px;
+  font-size: var(--fs-s);
+}
+
+.color-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--s2);
+}
+@media (min-width: 480px) {
+  .color-grid { grid-template-columns: repeat(4, 1fr); }
+}
+.color-grid button {
+  height: 40px;
+  font-size: var(--fs-s);
+}
+.btn-red { border-left: 4px solid #f85149; }
+.btn-green { border-left: 4px solid #3fb950; }
+.btn-yellow { border-left: 4px solid #d29922; }
+.btn-blue { border-left: 4px solid #58a6ff; }
+
+.screen-frame {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  border-radius: var(--r);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.screen-frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: none;
+}
+.screen-controls {
+  display: flex;
+  margin-top: var(--s2);
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s2);
+}
+.screen-info-group {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+}
+.auto-refresh-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-s);
+  cursor: pointer;
+  user-select: none;
+  color: var(--text);
+}
+.auto-refresh-label input {
+  cursor: pointer;
+  width: 15px;
+  height: 15px;
+  accent-color: var(--action);
+}
+</style>
+</head>
+<body>
+
+<div class="container">
+  <!-- Section: Screen Preview (Full width at top, collapsible) -->
+  <div id="box-screen" class="box is-collapsed">
+    <div class="box-header">
+      <div class="box-title-row box-title-clickable" id="screen-header">
+        <h2>Screen preview</h2>
+        <div class="box-header-actions">
+          <button type="button" class="btn-collapse" id="btn-toggle-screen" title="Toggle Screen Preview" aria-label="Toggle Screen Preview" aria-expanded="false">
+            <svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </button>
+        </div>
+      </div>
+      <p class="header-notice">Live screen preview from the TV. Captures the current display for headless control.</p>
+    </div>
+    <div id="screen-body">
+      <div class="screen-frame">
+        <img id="screen-img" src="" alt="TV Screen">
+        <div id="screen-spinner" style="display:none;padding:var(--s5);text-align:center;color:var(--muted);font-size:var(--fs-s)">Capturing screen from TV…</div>
+      </div>
+      <div class="screen-controls">
+        <div class="screen-info-group">
+          <span id="screen-time" style="font-size:var(--fs-s);color:var(--muted)"></span>
+          <label class="auto-refresh-label">
+            <input type="checkbox" id="chk-auto-refresh">
+            <span>Auto-refresh</span>
+          </label>
+        </div>
+        <div>
+          <button type="button" id="btn-refresh-screen" class="primary" style="font-size:var(--fs-s);padding:4px 12px">🔄 Capture / Refresh</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="app-layout">
+    <!-- Column 1: Controls (Keyboard, Remote, Numpad) -->
+    <div class="col-main">
+      <!-- Section 1: Keyboard Input (Collapsible) -->
+      <div id="box-keyboard" class="box">
+        <div class="box-header">
+          <div class="box-title-row box-title-clickable" id="keyboard-header">
+            <h2>Keyboard input</h2>
+            <div class="box-header-actions">
+              <div id="status" class="status-badge busy">Connecting…</div>
+              <button type="button" class="btn-collapse" id="btn-toggle-keyboard" title="Toggle Keyboard input" aria-label="Toggle Keyboard input" aria-expanded="true">
+                <svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"></polyline></svg>
+              </button>
+            </div>
+          </div>
+          <p class="header-notice">Type text into the focused field on the TV (YouTube, browser, apps). Supports any language.</p>
+        </div>
+
+        <div id="keyboard-body">
+          <div id="cert-banner">
+            <div style="font-weight:600;margin-bottom:var(--s1)">⚠️ TV Permission for port 8002</div>
+            <p style="font-size:var(--fs-s);color:var(--text);margin-bottom:var(--s2)">
+              To enable direct Unicode typing, open this URL in a new browser tab and tap <strong>Advanced → Proceed</strong>:
+            </p>
+            <div class="cert-url-bar">
+              <input type="text" id="cert-url" readonly>
+            </div>
+            <div class="cert-btn-bar">
+              <button type="button" id="btn-copy-cert" class="primary">📋 Copy URL</button>
+              <a id="cert-link" href="#" target="_blank" rel="noopener"><button type="button">Open ↗</button></a>
+              <button type="button" id="btn-reconnect">🔄 Reconnect</button>
+              <button type="button" id="btn-repair">Reset Pairing</button>
+            </div>
+            <p style="font-size:.78rem;color:var(--muted);margin-top:var(--s2);margin-bottom:0">
+              <em>Tip:</em> If the button doesn't open a tab due to Vetro's iframe sandbox, tap <strong>Copy URL</strong> and paste into your browser's address bar. Then return here and tap <strong>Reconnect</strong>.
+            </p>
+          </div>
+
+          <div class="input-row">
+            <input type="text" id="ti" placeholder="Type text here…" autocomplete="off" spellcheck="false" dir="auto">
+            <div class="input-btns">
+              <button type="button" class="primary" id="btn-send">Send ↵</button>
+              <button type="button" class="danger" id="btn-bksp">⌫ Del</button>
+            </div>
+          </div>
+          <p class="notice" style="margin-bottom:0">
+            <span class="kbd">Enter</span> — send &nbsp;·&nbsp;
+            <span class="kbd">Ctrl+Enter</span> — OK &nbsp;·&nbsp;
+            <span class="kbd">Backspace</span> on empty — TV delete
+          </p>
+        </div>
+      </div>
+
+      <!-- Section 2: Remote Control & Navigation -->
+      <div id="box-remote" class="box">
+        <div class="box-header">
+          <div class="box-title-row">
+            <h2>Remote control</h2>
+          </div>
+          <p class="header-notice">Ergonomic directional pad and quick controls. Hold buttons for continuous scrolling.</p>
+        </div>
+
+        <!-- D-Pad Directional Cluster -->
+        <div class="dpad-cluster">
+          <button type="button" data-key="XF86Home" title="Home">⌂ Home</button>
+          <button type="button" data-key="Up" aria-label="Up">▲</button>
+          <button type="button" data-key="XF86Back" title="Back">↩ Back</button>
+          <button type="button" data-key="Left" aria-label="Left">◀</button>
+          <button type="button" class="primary dpad-ok" data-key="Return">OK</button>
+          <button type="button" data-key="Right" aria-label="Right">▶</button>
+          <button type="button" data-key="XF86Menu" title="Menu">☰ Menu</button>
+          <button type="button" data-key="Down" aria-label="Down">▼</button>
+          <button type="button" data-key="XF86Exit" title="Exit">✕ Exit</button>
+        </div>
+
+        <!-- Volume & Channel Rockers -->
+        <div class="rocker-section">
+          <div class="rocker-pill">
+            <span class="rocker-tag">VOL</span>
+            <button type="button" data-key="XF86AudioRaiseVolume" title="Volume Up">＋</button>
+            <button type="button" data-key="XF86AudioMute" title="Mute">🔇</button>
+            <button type="button" data-key="XF86AudioLowerVolume" title="Volume Down">－</button>
+          </div>
+          <div class="center-stack">
+            <button type="button" data-key="XF86Info">ℹ Info</button>
+            <button type="button" data-key="XF86ChannelGuide">📅 Guide</button>
+            <button type="button" data-key="XF86ChannelList">📋 Channels</button>
+          </div>
+          <div class="rocker-pill">
+            <span class="rocker-tag">CH</span>
+            <button type="button" data-key="XF86RaiseChannel" title="Channel Up">▲</button>
+            <button type="button" data-key="XF86PreviousChannel" title="Previous Channel">⤾</button>
+            <button type="button" data-key="XF86LowerChannel" title="Channel Down">▼</button>
+          </div>
+        </div>
+
+        <p class="sec">System &amp; Display</p>
+        <div class="grid-4">
+          <button type="button" class="danger" data-key="XF86PowerOff">⏻ Power</button>
+          <button type="button" data-key="XF86TV">📺 Source</button>
+          <button type="button" data-key="XF86QuickMenu">⚙ Quick</button>
+          <button type="button" data-key="XF86Search">🔍 Search</button>
+          <button type="button" data-key="XF86Subtitle">💬 Subtitle</button>
+          <button type="button" data-key="XF86MultiView">📱 MultiView</button>
+          <button type="button" data-key="XF86PictureSize">📐 Aspect</button>
+          <button type="button" data-key="XF86Ambient">🖼 Ambient</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Column 2: Display & Playback (Playback & Colors, Number Pad) -->
+    <div class="col-side">
+      <!-- Section 3: Playback & Colors (Collapsible) -->
+      <div id="box-playback" class="box">
+        <div class="box-header">
+          <div class="box-title-row box-title-clickable" id="playback-header">
+            <h2>Playback &amp; Colors</h2>
+            <div class="box-header-actions">
+              <button type="button" class="btn-collapse" id="btn-toggle-playback" title="Toggle Playback & Colors" aria-label="Toggle Playback & Colors" aria-expanded="true">
+                <svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"></polyline></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div id="playback-body">
+          <div class="media-grid" style="margin-bottom:var(--s3)">
+            <button type="button" data-key="XF86AudioRewind">⏪ Rew</button>
+            <button type="button" data-key="XF86AudioPlayPause">⏯ P/P</button>
+            <button type="button" data-key="XF86AudioForward">⏩ FF</button>
+            <button type="button" data-key="XF86PreviousChapter">⏮ Prev</button>
+            <button type="button" data-key="XF86AudioStop">⏹ Stop</button>
+            <button type="button" data-key="XF86NextChapter">⏭ Next</button>
+            <button type="button" data-key="XF86AudioPause">⏸ Pause</button>
+            <button type="button" data-key="XF86AudioPlay" class="primary">▶ Play</button>
+            <button type="button" data-key="XF86AudioRecord">⏺ Rec</button>
+          </div>
+
+          <p class="sec" style="margin-top:0">Color Keys</p>
+          <div class="color-grid">
+            <button type="button" class="btn-red" data-key="XF86Red">🔴 Red</button>
+            <button type="button" class="btn-green" data-key="XF86Green">🟢 Green</button>
+            <button type="button" class="btn-yellow" data-key="XF86Yellow">🟡 Yellow</button>
+            <button type="button" data-key="XF86Blue">🔵 Blue</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Section 4: Number Pad -->
+      <div id="box-numpad" class="box">
+        <div class="box-header">
+          <div class="box-title-row">
+            <h2>Number pad</h2>
+          </div>
+        </div>
+        <div class="numpad">
+          <button type="button" data-key="1">1</button>
+          <button type="button" data-key="2">2</button>
+          <button type="button" data-key="3">3</button>
+          <button type="button" data-key="4">4</button>
+          <button type="button" data-key="5">5</button>
+          <button type="button" data-key="6">6</button>
+          <button type="button" data-key="7">7</button>
+          <button type="button" data-key="8">8</button>
+          <button type="button" data-key="9">9</button>
+          <button type="button" data-key="minus">−</button>
+          <button type="button" data-key="0">0</button>
+          <button type="button" data-key="BackSpace">⌫</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+var tvIp = location.hostname || "127.0.0.1";
+var tvToken = null;
+var ws = null;
+var wsConnected = false;
+var wsConnecting = false;
+var activePort = null;
+var activeHoldKey = null;
+
+var isTouch = ("ontouchstart" in window) || (navigator.maxTouchPoints > 0);
+
+var statusEl = document.getElementById("status");
+var ti = document.getElementById("ti");
+var certBanner = document.getElementById("cert-banner");
+var certLink = document.getElementById("cert-link");
+var certUrlInput = document.getElementById("cert-url");
+var btnCopyCert = document.getElementById("btn-copy-cert");
+var btnReconnect = document.getElementById("btn-reconnect");
+var btnRepair = document.getElementById("btn-repair");
+
+// Prevent mobile virtual keyboard from reappearing when tapping remote buttons or background
+document.addEventListener("pointerdown", function (e) {
+  if (e.target && e.target !== ti && !e.target.closest("#box-keyboard")) {
+    if (document.activeElement === ti) {
+      ti.blur();
+    }
+  }
+}, true);
+
+var fullCertUrl = "https://" + tvIp + ":8002/api/v2/";
+if (certUrlInput) certUrlInput.value = fullCertUrl;
+if (certLink) certLink.href = fullCertUrl;
+
+if (btnCopyCert) {
+  btnCopyCert.onclick = function () {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(fullCertUrl).then(function () {
+        btnCopyCert.textContent = "✔ Copied!";
+        setTimeout(function () { btnCopyCert.textContent = "📋 Copy URL"; }, 2500);
+      }).catch(function () {
+        certUrlInput.select();
+        document.execCommand("copy");
+        btnCopyCert.textContent = "✔ Copied!";
+        setTimeout(function () { btnCopyCert.textContent = "📋 Copy URL"; }, 2500);
+      });
+    } else {
+      certUrlInput.select();
+      document.execCommand("copy");
+      btnCopyCert.textContent = "✔ Copied!";
+      setTimeout(function () { btnCopyCert.textContent = "📋 Copy URL"; }, 2500);
+    }
+  };
+}
+
+if (btnReconnect) {
+  btnReconnect.onclick = function () {
+    setStatus("Connecting…", "busy");
+    if (ws) { try { ws.close(); } catch (e) {} }
+    wsConnected = false;
+    wsConnecting = false;
+    initWS();
+  };
+}
+
+if (btnRepair) {
+  btnRepair.onclick = function () {
+    tvToken = null;
+    fetch("savetoken", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reset: true })
+    }).then(function () {
+      setStatus("Pairing reset. Reconnecting…", "busy");
+      if (ws) { try { ws.close(); } catch (e) {} }
+      wsConnected = false;
+      wsConnecting = false;
+      initWS();
+    });
+  };
+}
+
+if (certLink) {
+  certLink.onclick = function (e) {
+    var opened = null;
+    try {
+      opened = window.open(fullCertUrl, "_blank");
+    } catch (err) {}
+    if (!opened) {
+      e.preventDefault();
+      if (btnCopyCert) btnCopyCert.click();
+      setStatus("Sandbox blocked popup. URL copied — paste in a new browser tab!", "warn");
+    }
+  };
+}
+
+function setStatus(msg, cls) {
+  statusEl.textContent = msg;
+  statusEl.className = "status-badge" + (cls ? " " + cls : "");
+}
+
+function utf8b64(str) {
+  return btoa(unescape(encodeURIComponent(str)));
+}
+
+// Repeatable keys that benefit from continuous hold
+var REPEAT_KEYS = {
+  "Up": true, "Down": true, "Left": true, "Right": true,
+  "XF86AudioRaiseVolume": true, "XF86AudioLowerVolume": true,
+  "XF86RaiseChannel": true, "XF86LowerChannel": true,
+  "BackSpace": true
+};
+
+// Samsung Remote WebSocket API key names (universal across 2016-2024+ Samsung TVs)
+var WS_KEY_MAP = {
+  // Navigation & Core
+  "Up": "KEY_UP", "Down": "KEY_DOWN", "Left": "KEY_LEFT", "Right": "KEY_RIGHT",
+  "Return": "KEY_ENTER", "XF86Home": "KEY_HOME", "XF86Back": "KEY_RETURN",
+  "XF86Exit": "KEY_EXIT", "XF86Menu": "KEY_MENU", "XF86Info": "KEY_INFO",
+  // Volume & Audio
+  "XF86AudioRaiseVolume": "KEY_VOLUP", "XF86AudioLowerVolume": "KEY_VOLDOWN", "XF86AudioMute": "KEY_MUTE",
+  // Channels
+  "XF86RaiseChannel": "KEY_CHUP", "XF86LowerChannel": "KEY_CHDOWN",
+  "XF86PreviousChannel": "KEY_PRECH", "XF86ChannelList": "KEY_CH_LIST", "XF86ChannelGuide": "KEY_GUIDE",
+  // Media Playback
+  "XF86AudioRewind": "KEY_REWIND",
+  "XF86AudioPlay": "KEY_PLAY", "XF86AudioPause": "KEY_PAUSE", "XF86AudioPlayPause": "KEY_PLAY_BACK",
+  "XF86AudioStop": "KEY_STOP", "XF86AudioForward": "KEY_FF", "XF86AudioRecord": "KEY_REC",
+  // Color Keys (Samsung standard uses KEY_CYAN for Blue)
+  "XF86Red": "KEY_RED", "XF86Green": "KEY_GREEN", "XF86Yellow": "KEY_YELLOW", "XF86Blue": "KEY_CYAN",
+  // System & Extra
+  "XF86PowerOff": "KEY_POWER", "XF86TV": "KEY_SOURCE", "XF86DiscretSourceTV": "KEY_SOURCE",
+  "XF86QuickMenu": "KEY_TOOLS", "XF86Search": "KEY_SEARCH", "XF86Subtitle": "KEY_SUB_TITLE",
+  "XF86MultiView": "KEY_MULTI_VIEW", "XF86PictureSize": "KEY_ASPECT", "XF86Ambient": "KEY_AMBIENT",
+  // Digits
+  "0": "KEY_0", "1": "KEY_1", "2": "KEY_2", "3": "KEY_3", "4": "KEY_4",
+  "5": "KEY_5", "6": "KEY_6", "7": "KEY_7", "8": "KEY_8", "9": "KEY_9",
+  "minus": "KEY_MINUS"
+};
+
+function pressDown(key) {
+  if (document.activeElement === ti) {
+    ti.blur();
+  }
+  if (!key || activeHoldKey === key) return;
+  activeHoldKey = key;
+  if (wsConnected && ws && ws.readyState === WebSocket.OPEN && WS_KEY_MAP[key]) {
+    try {
+      ws.send(JSON.stringify({
+        method: "ms.remote.control",
+        params: { Cmd: "Press", DataOfCmd: WS_KEY_MAP[key], Option: "false", TypeOfRemote: "SendRemoteKey" }
+      }));
+      return;
+    } catch (e) { wsConnected = false; }
+  }
+  fetch("key", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key: key, action: "down" })
+  }).catch(function () {});
+}
+
+function releaseUp(key) {
+  var k = key || activeHoldKey;
+  if (!k) return;
+  activeHoldKey = null;
+  if (wsConnected && ws && ws.readyState === WebSocket.OPEN && WS_KEY_MAP[k]) {
+    try {
+      ws.send(JSON.stringify({
+        method: "ms.remote.control",
+        params: { Cmd: "Release", DataOfCmd: WS_KEY_MAP[k], Option: "false", TypeOfRemote: "SendRemoteKey" }
+      }));
+      return;
+    } catch (e) { wsConnected = false; }
+  }
+  fetch("key", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key: k, action: "up" })
+  }).catch(function () {});
+}
+
+function sendKey(key) {
+  if (document.activeElement === ti) {
+    ti.blur();
+  }
+  if (!key) return Promise.resolve();
+  if (wsConnected && ws && ws.readyState === WebSocket.OPEN && WS_KEY_MAP[key]) {
+    try {
+      ws.send(JSON.stringify({
+        method: "ms.remote.control",
+        params: { Cmd: "Click", DataOfCmd: WS_KEY_MAP[key], Option: "false", TypeOfRemote: "SendRemoteKey" }
+      }));
+      return Promise.resolve();
+    } catch (e) { wsConnected = false; }
+  }
+  return fetch("key", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key: key })
+  }).then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d.ok) setStatus("Failed: " + (d.error || d.stderr || ""), "err");
+    })
+    .catch(function () { setStatus("Network error", "err"); });
+}
+
+function initWS(forcePort) {
+  if (wsConnected) return;
+  if (wsConnecting && !forcePort) return;
+  wsConnecting = true;
+
+  var port = forcePort || activePort || 8002;
+  var isSecure = (port === 8002);
+  var proto = isSecure ? "wss://" : "ws://";
+  var appB64 = btoa("TVKeyboard");
+  var url = proto + tvIp + ":" + port + "/api/v2/channels/samsung.remote.control?name=" + appB64 +
+            (tvToken ? "&token=" + encodeURIComponent(tvToken) : "");
+
+  var currentWs;
+  try {
+    currentWs = new WebSocket(url);
+    ws = currentWs;
+  } catch (e) {
+    wsConnecting = false;
+    wsConnected = false;
+    if (port === 8002) {
+      setTimeout(function () { initWS(8001); }, 100);
+    }
+    return;
+  }
+
+  var opened = false;
+  var connTimer = setTimeout(function () {
+    if (!opened && wsConnecting && ws === currentWs) {
+      try { currentWs.close(); } catch (e) {}
+      wsConnecting = false;
+      if (port === 8002) {
+        initWS(8001);
+      } else {
+        certBanner.style.display = "block";
+      }
+    }
+  }, 3000);
+
+  currentWs.onopen = function () {
+    opened = true;
+    clearTimeout(connTimer);
+  };
+
+  currentWs.onmessage = function (e) {
+    try {
+      var msg = JSON.parse(e.data);
+      if (msg.event === "ms.channel.connect") {
+        wsConnected = true;
+        wsConnecting = false;
+        activePort = port;
+        var t = msg.data && msg.data.token ? String(msg.data.token) : null;
+        if (t && t !== tvToken) {
+          tvToken = t;
+          fetch("savetoken", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token: t })
+          }).catch(function () {});
+        }
+        setStatus("Connected ✔ Ready", "ok");
+        certBanner.style.display = "none";
+      } else if (msg.event === "ms.channel.unauthorized") {
+        wsConnected = false;
+        wsConnecting = false;
+        tvToken = null;
+        fetch("savetoken", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reset: true })
+        }).catch(function () {});
+        setStatus("Pairing required — please select 'Allow' on your TV screen", "warn");
+        setTimeout(function () { initWS(port); }, 1500);
+      }
+    } catch (err) {}
+  };
+
+  currentWs.onerror = function () {
+    clearTimeout(connTimer);
+    wsConnected = false;
+    wsConnecting = false;
+    if (!opened && port === 8002) {
+      initWS(8001);
+    } else if (!opened) {
+      certBanner.style.display = "block";
+    }
+  };
+
+  currentWs.onclose = function () {
+    clearTimeout(connTimer);
+    wsConnected = false;
+    wsConnecting = false;
+  };
+}
+
+fetch("status").then(function (r) { return r.json(); }).then(function (d) {
+  if (d.token) tvToken = d.token;
+  initWS();
+}).catch(function () {
+  initWS();
+});
+
+var SPECIAL = {
+  ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
+  Backspace: "BackSpace", Escape: "Escape"
+};
+
+function sendText(text) {
+  if (!text) return;
+  var isAscii = /^[\x20-\x7E]*$/.test(text);
+
+  if (wsConnected && ws && ws.readyState === WebSocket.OPEN) {
+    setStatus("Sending text…", "busy");
+    try {
+      ws.send(JSON.stringify({
+        method: "ms.remote.control",
+        params: {
+          Cmd: utf8b64(text),
+          DataOfCmd: "base64",
+          TypeOfRemote: "SendInputString"
+        }
+      }));
+      setStatus("Text sent ✔", "ok");
+      return;
+    } catch (e) {
+      wsConnected = false;
+    }
+  }
+
+  if (isAscii) {
+    setStatus("Typing on TV…", "busy");
+    fetch("type", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: text })
+    }).then(function (r) { return r.json(); })
+      .then(function (d) {
+        setStatus(d.ok ? "Text sent ✔" : "Failed: " + (d.error || ""), d.ok ? "ok" : "err");
+      })
+      .catch(function () { setStatus("Network error", "err"); });
+  } else {
+    certBanner.style.display = "block";
+    setStatus("Unicode text input requires TV certificate approval (see banner above)", "warn");
+    initWS();
+  }
+}
+
+// Auto RTL text direction for right-to-left scripts
+var RTL_REGEX = /[\u0591-\u07FF\uFB1D-\uFDFD\uFE70-\uFEFC]/;
+ti.addEventListener("input", function () {
+  ti.dir = RTL_REGEX.test(ti.value) ? "rtl" : "ltr";
+});
+
+ti.addEventListener("keydown", function (e) {
+  if (e.key === "Enter" && !e.ctrlKey) {
+    e.preventDefault();
+    var t = ti.value; ti.value = ""; ti.dir = "ltr";
+    sendText(t);
+    if (isTouch) ti.blur();
+    return;
+  }
+  if (e.key === "Enter" && e.ctrlKey) {
+    e.preventDefault();
+    sendKey("Return");
+    return;
+  }
+  if (e.key === "Backspace" && ti.value === "") {
+    e.preventDefault();
+    if (e.repeat) return;
+    pressDown("BackSpace");
+    return;
+  }
+  if (e.key === "Escape") {
+    e.preventDefault();
+    sendKey("Escape");
+    return;
+  }
+  if ((e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "ArrowLeft" || e.key === "ArrowRight") && !e.ctrlKey) {
+    e.preventDefault();
+    if (e.repeat) return;
+    pressDown(SPECIAL[e.key]);
+    return;
+  }
+});
+
+ti.addEventListener("keyup", function (e) {
+  if (e.key === "Backspace" && activeHoldKey === "BackSpace") {
+    e.preventDefault();
+    releaseUp("BackSpace");
+    return;
+  }
+  if (SPECIAL[e.key] && activeHoldKey === SPECIAL[e.key]) {
+    e.preventDefault();
+    releaseUp(SPECIAL[e.key]);
+    return;
+  }
+});
+
+document.addEventListener("keydown", function (e) {
+  if (document.activeElement === ti) return;
+  var key = SPECIAL[e.key];
+  if (key) {
+    e.preventDefault();
+    if (e.repeat) return;
+    if (REPEAT_KEYS[key]) {
+      pressDown(key);
+    } else {
+      sendKey(key);
+    }
+  }
+});
+
+document.addEventListener("keyup", function (e) {
+  if (document.activeElement === ti) return;
+  var key = SPECIAL[e.key];
+  if (key && activeHoldKey === key) {
+    e.preventDefault();
+    releaseUp(key);
+  }
+});
+
+window.addEventListener("blur", function () {
+  if (activeHoldKey) releaseUp();
+});
+
+document.getElementById("btn-send").addEventListener("click", function () {
+  var t = ti.value; ti.value = ""; ti.dir = "ltr";
+  sendText(t);
+  if (!isTouch) {
+    ti.focus();
+  } else {
+    ti.blur();
+  }
+});
+
+var btnBksp = document.getElementById("btn-bksp");
+btnBksp.addEventListener("pointerdown", function (e) {
+  e.preventDefault();
+  pressDown("BackSpace");
+});
+btnBksp.addEventListener("pointerup", function (e) {
+  e.preventDefault();
+  releaseUp("BackSpace");
+  if (!isTouch) ti.focus();
+});
+btnBksp.addEventListener("pointerleave", function (e) {
+  if (activeHoldKey === "BackSpace") releaseUp("BackSpace");
+});
+btnBksp.addEventListener("pointercancel", function (e) {
+  if (activeHoldKey === "BackSpace") releaseUp("BackSpace");
+});
+
+var keyButtons = document.querySelectorAll("[data-key]");
+for (var i = 0; i < keyButtons.length; i++) {
+  (function (btn) {
+    var k = btn.getAttribute("data-key");
+    if (REPEAT_KEYS[k]) {
+      btn.addEventListener("pointerdown", function (e) {
+        e.preventDefault();
+        pressDown(k);
+      });
+      btn.addEventListener("pointerup", function (e) {
+        e.preventDefault();
+        releaseUp(k);
+      });
+      btn.addEventListener("pointerleave", function (e) {
+        if (activeHoldKey === k) releaseUp(k);
+      });
+      btn.addEventListener("pointercancel", function (e) {
+        if (activeHoldKey === k) releaseUp(k);
+      });
+    } else {
+      btn.addEventListener("click", function () {
+        sendKey(k);
+      });
+    }
+  })(keyButtons[i]);
+}
+
+// Collapsible cards handling
+var boxKeyboard = document.getElementById("box-keyboard");
+var btnToggleKeyboard = document.getElementById("btn-toggle-keyboard");
+var keyboardHeader = document.getElementById("keyboard-header");
+
+function toggleKeyboardCollapse(e) {
+  if (e && e.target && (e.target.closest("#status") || e.target.closest("a") || e.target.closest("input"))) return;
+  var collapsed = boxKeyboard.classList.toggle("is-collapsed");
+  btnToggleKeyboard.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  try {
+    localStorage.setItem("vetro_keyboard_collapsed", collapsed ? "1" : "0");
+  } catch (err) {}
+}
+
+if (btnToggleKeyboard && boxKeyboard) {
+  btnToggleKeyboard.addEventListener("click", function (e) {
+    e.stopPropagation();
+    toggleKeyboardCollapse();
+  });
+  if (keyboardHeader) {
+    keyboardHeader.addEventListener("click", toggleKeyboardCollapse);
+  }
+  try {
+    if (localStorage.getItem("vetro_keyboard_collapsed") === "1") {
+      boxKeyboard.classList.add("is-collapsed");
+      btnToggleKeyboard.setAttribute("aria-expanded", "false");
+    }
+  } catch (err) {}
+}
+
+var boxPlayback = document.getElementById("box-playback");
+var btnTogglePlayback = document.getElementById("btn-toggle-playback");
+var playbackHeader = document.getElementById("playback-header");
+
+function togglePlaybackCollapse(e) {
+  if (e && e.target && (e.target.closest("a") || e.target.closest("button:not(.btn-collapse)"))) return;
+  var collapsed = boxPlayback.classList.toggle("is-collapsed");
+  btnTogglePlayback.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  try {
+    localStorage.setItem("vetro_playback_collapsed", collapsed ? "1" : "0");
+  } catch (err) {}
+}
+
+if (btnTogglePlayback && boxPlayback) {
+  btnTogglePlayback.addEventListener("click", function (e) {
+    e.stopPropagation();
+    togglePlaybackCollapse();
+  });
+  if (playbackHeader) {
+    playbackHeader.addEventListener("click", togglePlaybackCollapse);
+  }
+  try {
+    if (localStorage.getItem("vetro_playback_collapsed") === "1") {
+      boxPlayback.classList.add("is-collapsed");
+      btnTogglePlayback.setAttribute("aria-expanded", "false");
+    }
+  } catch (err) {}
+}
+
+// Screen preview logic
+var boxScreen = document.getElementById("box-screen");
+var btnToggleScreen = document.getElementById("btn-toggle-screen");
+var screenHeader = document.getElementById("screen-header");
+var screenImg = document.getElementById("screen-img");
+var screenSpinner = document.getElementById("screen-spinner");
+var screenTime = document.getElementById("screen-time");
+var btnRefreshScreen = document.getElementById("btn-refresh-screen");
+var chkAutoRefresh = document.getElementById("chk-auto-refresh");
+var screenCapturing = false;
+var autoRefreshTimer = null;
+
+function fetchScreenshot() {
+  if (screenCapturing) return;
+  screenCapturing = true;
+  if (!screenImg.src || screenImg.style.display === "none") {
+    screenSpinner.textContent = "Capturing screen from TV…";
+    screenSpinner.style.display = "block";
+  } else {
+    screenTime.textContent = "Updating preview…";
+  }
+  btnRefreshScreen.disabled = true;
+  btnRefreshScreen.textContent = "⏳ Capturing…";
+
+  var img = new Image();
+  var url = "screenshot?t=" + Date.now();
+  img.onload = function () {
+    screenImg.src = url;
+    screenImg.style.display = "block";
+    screenSpinner.style.display = "none";
+    screenCapturing = false;
+    btnRefreshScreen.disabled = false;
+    btnRefreshScreen.textContent = "🔄 Capture / Refresh";
+    var d = new Date();
+    var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+    screenTime.textContent = "Captured at " + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+
+    if (chkAutoRefresh && chkAutoRefresh.checked && !boxScreen.classList.contains("is-collapsed")) {
+      autoRefreshTimer = setTimeout(fetchScreenshot, 3500);
+    }
+  };
+  img.onerror = function () {
+    if (!screenImg.src || screenImg.style.display === "none") {
+      screenSpinner.textContent = "Failed to capture screen from TV";
+    } else {
+      screenTime.textContent = "Refresh failed — retrying";
+    }
+    screenCapturing = false;
+    btnRefreshScreen.disabled = false;
+    btnRefreshScreen.textContent = "🔄 Capture / Refresh";
+
+    if (chkAutoRefresh && chkAutoRefresh.checked && !boxScreen.classList.contains("is-collapsed")) {
+      autoRefreshTimer = setTimeout(fetchScreenshot, 5000);
+    }
+  };
+  img.src = url;
+}
+
+function toggleScreenCollapse() {
+  var collapsed = boxScreen.classList.toggle("is-collapsed");
+  btnToggleScreen.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  if (collapsed) {
+    if (autoRefreshTimer) {
+      clearTimeout(autoRefreshTimer);
+      autoRefreshTimer = null;
+    }
+  } else {
+    if (!screenImg.src || screenImg.style.display === "none") {
+      fetchScreenshot();
+    } else if (chkAutoRefresh && chkAutoRefresh.checked && !screenCapturing) {
+      fetchScreenshot();
+    }
+  }
+}
+
+if (btnToggleScreen && boxScreen) {
+  btnToggleScreen.addEventListener("click", function (e) {
+    e.stopPropagation();
+    toggleScreenCollapse();
+  });
+  if (screenHeader) {
+    screenHeader.addEventListener("click", toggleScreenCollapse);
+  }
+}
+
+if (chkAutoRefresh) {
+  chkAutoRefresh.onchange = function () {
+    if (chkAutoRefresh.checked) {
+      if (!screenCapturing) fetchScreenshot();
+    } else {
+      if (autoRefreshTimer) clearTimeout(autoRefreshTimer);
+    }
+  };
+}
+
+btnRefreshScreen.onclick = function () {
+  fetchScreenshot();
+};
+
+if (!isTouch) {
+  ti.focus();
+}
+</script>
+</body>
+</html>

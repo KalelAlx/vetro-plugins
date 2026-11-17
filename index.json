@@ -56,6 +56,19 @@
       }
     },
     {
+      "id": "keyboard",
+      "name": "Keyboard & Remote",
+      "version": "1.0.0",
+      "author": "w4po",
+      "description": "Text typing for system inputs, live 1080p screen preview, and full TV remote with navigation, volume, channel, playback and color keys.",
+      "permissions": [
+        "exec"
+      ],
+      "url": "dist/keyboard-1.0.0.vplugin",
+      "sha256": "7858bd09614f590cadd1cb62ecc9bf163d0fa5419872b7bff4ce8be178d0494e",
+      "size": 63140
+    },
+    {
       "id": "nordvpn",
       "name": "NordVPN",
       "version": "1.0.0",
