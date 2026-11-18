@@ -10,7 +10,9 @@ Type text in any language from your browser into focused input fields on your Sa
 
 Adds a unified **Keyboard** tab to the Vetro dashboard:
 - **Text Input:** Type into the text box and press **Enter** (or click **Send**) to inject text in any language into apps using the TV's native input fields or virtual keyboard (e.g. Samsung Internet Browser address bar, system settings, Wi-Fi passwords, and login dialogs).
-- **Live Screen Preview:** One-click screen capture allows viewing what is currently displayed on the TV (menus, running apps, video playback, search boxes) directly inside your browser for true headless remote control. Expandable full-width preview with live auto-refresh and full image inspection.
+- **Interactive Live Screen Preview:** Expandable full-width 1080p TV display preview with direct pointer & gesture control:
+  - **Pointer Mode (`🖱 Pointer`):** Tap to click, double-tap to double-click, press & hold, press & drag (for sliders, scrollbars, and text selection), right-click, `Move only` hover mode, and scroll wheel support across the entire `1920×1080` screen (browser chrome, tabs, URL bar, web pages, and pointer-enabled apps).
+  - **D-Pad Mode (`🕹 D-Pad`):** Swipe or tap directional zones directly on the preview to navigate and select items in D-Pad-only apps that ignore mouse input (such as YouTube or Netflix).
 - **Navigation & D-Pad:** Full directional control (`Up`, `Down`, `Left`, `Right`, `OK`), `Home`, `Back`, `Menu`, `Info`, `Exit`.
 - **Volume & Channels:** `Volume +`, `Volume −`, `Mute`, `Channel +`, `Channel −`, `Previous Channel`, `Channel List`, `Guide`.
 - **Smooth Continuous Hold:** Press and hold arrow keys, volume, or channel buttons on your physical keyboard or screen to smoothly and continuously scroll without lag or stutter.
@@ -35,6 +37,7 @@ Samsung Smart TVs handle text entry in two different ways depending on the app:
 | --- | --- |
 | `/usr/bin/input_keyevent <keysym> [down\|up]` | Injects remote-control key events (D-pad, volume, channels, playback, system keys, digits) into the focused app |
 | `sh -c 'for k in ...; do /usr/bin/input_keyevent "$k"; sleep 0.04; done'` | Injects ASCII text directly via local TV key events |
+| `/usr/bin/enlightenment_info -init_device / -mousegen / -deinit_device` | Provides native TV mouse scroll wheel events and fallback cursor movement/clicks when WebSocket is unavailable |
 | `dbus-send --system --print-reply --dest=org.enlightenment.wm /org/enlightenment/wm org.enlightenment.wm.info.dump_screen string:'/tmp/screenshot.png'` | Captures a full-resolution 1080p frame buffer snapshot from the Enlightenment window manager |
 
 ## Network

@@ -56,6 +56,51 @@ module.exports = function (ctx) {
     var page = null;
     var activeHoldTimer = null;
     var activeHoldKey = null;
+    var mouseHeldNode = null;
+
+    function findMouseNode() {
+        try {
+            var txt = fs.readFileSync('/proc/bus/input/devices', 'utf8');
+            var blocks = txt.split(/\n\s*\n/);
+            var fallback = null;
+            for (var i = 0; i < blocks.length; i++) {
+                var b = blocks[i];
+                var hm = /^H:\s*Handlers=(.*)$/m.exec(b);
+                if (!hm || !/\bmouse\d+\b/.test(hm[1])) continue;
+                var em = /\bevent(\d{1,2})\b/.exec(hm[1]);
+                if (!em) continue;
+                var node = '/dev/input/event' + em[1];
+                if (/Remote-Input\(Mouse\)|SMART_VIEW/i.test(b)) return node;
+                if (!fallback) fallback = node;
+            }
+            return fallback;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function buildJumpCmds(x, y) {
+        var cmds = [
+            '/usr/bin/enlightenment_info -mousegen --axis=-2000,-2000',
+            '/usr/bin/enlightenment_info -mousegen --axis=-2000,-2000'
+        ];
+        if (x < 36 && y < 36 && (x > 0 || y > 0)) {
+            cmds.push('/usr/bin/enlightenment_info -mousegen --axis=100,100');
+            cmds.push('/usr/bin/enlightenment_info -mousegen --axis=' + Math.round((x - 200) / 2) + ',' + Math.round((y - 200) / 2));
+        } else if (x > 0 || y > 0) {
+            cmds.push('/usr/bin/enlightenment_info -mousegen --axis=' + Math.round(x / 2) + ',' + Math.round(y / 2));
+        }
+        return cmds;
+    }
+
+    function stopMouseHold() {
+        if (mouseHeldNode) {
+            var n = mouseHeldNode;
+            mouseHeldNode = null;
+            var relCmd = "sh -c '/usr/bin/enlightenment_info -init_device --node=" + n + " >/dev/null 2>&1; /usr/bin/enlightenment_info -mousegen --btn=0 --state=up >/dev/null 2>&1; /usr/bin/enlightenment_info -deinit_device >/dev/null 2>&1'";
+            ctx.execute(relCmd, 2000).catch(function () {});
+        }
+    }
 
     function stopHold() {
         if (activeHoldTimer) {
@@ -99,6 +144,7 @@ module.exports = function (ctx) {
 
         stop: function () {
             stopHold();
+            stopMouseHold();
             page = null;
         },
 
@@ -218,6 +264,84 @@ module.exports = function (ctx) {
                     }
                     var cmd = "sh -c 'for k in " + keys.join(' ') + "; do /usr/bin/input_keyevent \"$k\"; sleep 0.04; done'";
                     ctx.execute(cmd, 15000)
+                        .then(function (r) {
+                            res.writeHead(200, { 'content-type': 'application/json' });
+                            res.end(JSON.stringify({ ok: r.exit_code === 0, stderr: r.stderr }));
+                        })
+                        .catch(function (e) {
+                            res.writeHead(200, { 'content-type': 'application/json' });
+                            res.end(JSON.stringify({ ok: false, error: e.message }));
+                        });
+                });
+                return true;
+            }
+
+            // POST api/mouse — fallback cursor jump/click/drag and scroll wheel via enlightenment_info
+            if (sub === 'mouse' && req.method === 'POST') {
+                var bmouse = '';
+                req.on('data', function (c) { bmouse += c; });
+                req.on('end', function () {
+                    var parsed;
+                    try { parsed = JSON.parse(bmouse); } catch (e) { parsed = null; }
+                    if (!parsed || typeof parsed !== 'object') {
+                        res.writeHead(400, { 'content-type': 'application/json' });
+                        res.end(JSON.stringify({ ok: false, error: 'invalid payload' }));
+                        return;
+                    }
+                    var action = String(parsed.action || 'click');
+                    var node = findMouseNode();
+                    if (!node) {
+                        res.writeHead(200, { 'content-type': 'application/json' });
+                        res.end(JSON.stringify({ ok: false, error: 'no mouse device node' }));
+                        return;
+                    }
+                    var hasXY = (typeof parsed.x === 'number' && typeof parsed.y === 'number' && isFinite(parsed.x) && isFinite(parsed.y));
+                    var x = hasXY ? Math.max(0, Math.min(1919, Math.round(parsed.x))) : 0;
+                    var y = hasXY ? Math.max(0, Math.min(1079, Math.round(parsed.y))) : 0;
+                    var cmds = ['/usr/bin/enlightenment_info -init_device --node=' + node];
+
+                    if (action === 'move' && hasXY) {
+                        cmds = cmds.concat(buildJumpCmds(x, y));
+                    } else if (action === 'click' && hasXY) {
+                        cmds = cmds.concat(buildJumpCmds(x, y));
+                        cmds.push('/usr/bin/enlightenment_info -mousegen --btn=0');
+                    } else if (action === 'clickInPlace') {
+                        cmds.push('/usr/bin/enlightenment_info -mousegen --btn=0');
+                    } else if (action === 'dblclick' && hasXY) {
+                        cmds = cmds.concat(buildJumpCmds(x, y));
+                        cmds.push('/usr/bin/enlightenment_info -mousegen --btn=0');
+                        cmds.push('usleep 60000');
+                        cmds.push('/usr/bin/enlightenment_info -mousegen --btn=0');
+                    } else if (action === 'rightclick' && hasXY) {
+                        cmds = cmds.concat(buildJumpCmds(x, y));
+                        cmds.push('/usr/bin/enlightenment_info -mousegen --btn=1');
+                    } else if (action === 'down' && hasXY) {
+                        cmds = cmds.concat(buildJumpCmds(x, y));
+                        cmds.push('/usr/bin/enlightenment_info -mousegen --btn=0 --state=down');
+                        mouseHeldNode = node;
+                    } else if (action === 'drag') {
+                        var dx = Math.max(-2000, Math.min(2000, Math.round(Number(parsed.dx) || 0)));
+                        var dy = Math.max(-2000, Math.min(2000, Math.round(Number(parsed.dy) || 0)));
+                        if (dx !== 0 || dy !== 0) {
+                            cmds.push('/usr/bin/enlightenment_info -mousegen --axis=' + dx + ',' + dy + ' --state=move');
+                        }
+                    } else if (action === 'up') {
+                        cmds.push('/usr/bin/enlightenment_info -mousegen --btn=0 --state=up');
+                        mouseHeldNode = null;
+                    } else if (action === 'wheel') {
+                        var w = Math.max(-5, Math.min(5, Math.round(Number(parsed.delta) || 0)));
+                        if (w === 0) w = -1;
+                        if (hasXY) cmds = cmds.concat(buildJumpCmds(x, y));
+                        cmds.push('/usr/bin/enlightenment_info -mousegen --wheel=' + w);
+                    } else {
+                        res.writeHead(400, { 'content-type': 'application/json' });
+                        res.end(JSON.stringify({ ok: false, error: 'invalid mouse action' }));
+                        return;
+                    }
+
+                    cmds.push('/usr/bin/enlightenment_info -deinit_device');
+                    var shCmd = "sh -c '" + cmds.join(' >/dev/null 2>&1; ') + " >/dev/null 2>&1'";
+                    ctx.execute(shCmd, 5000)
                         .then(function (r) {
                             res.writeHead(200, { 'content-type': 'application/json' });
                             res.end(JSON.stringify({ ok: r.exit_code === 0, stderr: r.stderr }));

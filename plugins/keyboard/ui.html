@@ -439,6 +439,12 @@ button.danger:hover { background: rgba(248, 81, 73, .22); }
 .btn-yellow { border-left: 4px solid #d29922; }
 .btn-blue { border-left: 4px solid #58a6ff; }
 
+.screen-stage {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
 .screen-frame {
   width: 100%;
   aspect-ratio: 16 / 9;
@@ -450,12 +456,131 @@ button.danger:hover { background: rgba(248, 81, 73, .22); }
   display: flex;
   align-items: center;
   justify-content: center;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.screen-frame.has-image {
+  cursor: crosshair;
+  touch-action: none;
 }
 .screen-frame img {
   width: 100%;
   height: 100%;
   object-fit: contain;
   display: none;
+  pointer-events: none;
+}
+#tv-cursor {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  margin-left: -10px;
+  margin-top: -10px;
+  border-radius: 50%;
+  border: 2px solid #58a6ff;
+  background: rgba(88, 166, 255, .24);
+  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, .82), 0 0 10px rgba(88, 166, 255, .55);
+  pointer-events: none;
+  display: none;
+  z-index: 4;
+  transition: transform .12s ease, border-color .12s ease, background .12s ease;
+}
+#tv-cursor::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 4px;
+  height: 4px;
+  margin: -2px 0 0 -2px;
+  border-radius: 50%;
+  background: #fff;
+}
+#tv-cursor.is-holding {
+  border-color: #d29922;
+  background: rgba(210, 153, 34, .42);
+  transform: scale(1.38);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, .85), 0 0 14px rgba(210, 153, 34, .85);
+}
+.click-ripple {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  margin-left: -12px;
+  margin-top: -12px;
+  border-radius: 50%;
+  border: 2px solid #58a6ff;
+  pointer-events: none;
+  z-index: 3;
+  animation: tvRipple .42s ease-out forwards;
+}
+.click-ripple.ripple-alt {
+  border-color: #3fb950;
+}
+@keyframes tvRipple {
+  0% { transform: scale(.45); opacity: .95; }
+  100% { transform: scale(2.35); opacity: 0; }
+}
+#dpad-overlay {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  pointer-events: none;
+  display: none;
+  z-index: 2;
+}
+.screen-frame.has-image.is-dpad-mode #dpad-overlay {
+  display: block;
+}
+.dpad-zone-center {
+  position: absolute;
+  left: 34%;
+  top: 28%;
+  width: 32%;
+  height: 44%;
+  border: 2px dashed rgba(255, 255, 255, .52);
+  border-radius: 14px;
+  background: rgba(13, 17, 23, .32);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  color: #fff;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, .95);
+}
+.dpad-zone-hint {
+  position: absolute;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: rgba(13, 17, 23, .72);
+  border: 2px solid rgba(255, 255, 255, .56);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, .82);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  line-height: 1;
+  color: #fff;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, .95);
+}
+.dpad-zone-up { top: 6%; left: 50%; transform: translateX(-50%); }
+.dpad-zone-down { bottom: 6%; left: 50%; transform: translateX(-50%); }
+.dpad-zone-left { left: 6%; top: 50%; transform: translateY(-50%); }
+.dpad-zone-right { right: 6%; top: 50%; transform: translateY(-50%); }
+@media (max-width: 520px) {
+  .dpad-zone-hint {
+    width: 38px;
+    height: 38px;
+    font-size: 18px;
+  }
+  .dpad-zone-center {
+    font-size: 18px;
+  }
 }
 .screen-controls {
   display: flex;
@@ -465,11 +590,94 @@ button.danger:hover { background: rgba(248, 81, 73, .22); }
   flex-wrap: wrap;
   gap: var(--s2);
 }
-.screen-info-group {
+.screen-info-group, .screen-action-group {
   display: flex;
   align-items: center;
-  gap: var(--s3);
+  gap: 6px;
   flex-wrap: wrap;
+}
+.mode-switch {
+  display: inline-flex;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 2px;
+  gap: 2px;
+}
+.mode-switch button {
+  height: 28px;
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: var(--fs-xs);
+  border: none;
+  border-radius: calc(var(--r) - 2px);
+  background: transparent;
+  color: var(--muted);
+}
+.mode-switch button:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, .05);
+}
+.mode-switch button.active {
+  background: var(--action);
+  color: #0d1117;
+  font-weight: 600;
+}
+.btn-mini, a.link-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  min-height: 28px;
+  padding: 0 9px;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--text);
+  background: var(--btn);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn-mini:hover, a.link-pill:hover {
+  background: var(--btn-h);
+}
+.btn-mini.active {
+  border-color: var(--action);
+  background: rgba(88, 166, 255, .18);
+  color: #79c0ff;
+}
+.screen-hint {
+  margin: 6px 0 0;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+#standalone-banner {
+  display: none;
+  margin-bottom: var(--s2);
+  padding: var(--s2) var(--s3);
+  border-radius: var(--r);
+  background: rgba(88, 166, 255, .08);
+  border: 1px solid rgba(88, 166, 255, .35);
+}
+.standalone-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+.standalone-row input {
+  flex: 1;
+  min-width: 180px;
+  padding: 4px 8px;
+  font-size: var(--fs-xs);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  background: var(--bg);
+  color: var(--action);
+  border: 1px solid var(--border);
+  border-radius: 6px;
 }
 .auto-refresh-label {
   display: flex;
@@ -479,12 +687,102 @@ button.danger:hover { background: rgba(248, 81, 73, .22); }
   cursor: pointer;
   user-select: none;
   color: var(--text);
+  white-space: nowrap;
 }
 .auto-refresh-label input {
   cursor: pointer;
   width: 15px;
   height: 15px;
   accent-color: var(--action);
+}
+#only-theater-actions {
+  display: none;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Fullscreen / Standalone Screen-Only Theater Mode */
+body.is-screen-only {
+  margin: 0;
+  padding: 0;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  background: #000;
+}
+body.is-screen-only .container {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  background: #000;
+  z-index: 999;
+}
+body.is-screen-only.is-rotated-landscape .container {
+  width: 100vh;
+  width: 100dvh;
+  height: 100vw;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+body.is-screen-only .app-layout,
+body.is-screen-only #box-screen > .box-header,
+body.is-screen-only #screen-hint,
+body.is-screen-only #standalone-banner {
+  display: none !important;
+}
+body.is-screen-only #box-screen {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: #000;
+  display: flex;
+  flex-direction: column;
+}
+body.is-screen-only #screen-body {
+  flex: 1;
+  min-height: 0;
+  display: flex !important;
+  flex-direction: column;
+}
+body.is-screen-only .screen-stage {
+  flex: 1;
+  min-height: 0;
+  padding: 2px;
+  background: #000;
+  overflow: hidden;
+}
+body.is-screen-only .screen-frame {
+  border-radius: 4px;
+}
+body.is-screen-only .screen-controls {
+  margin-top: 0;
+  padding: 6px 10px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  gap: 8px;
+}
+body.is-screen-only .screen-info-group,
+body.is-screen-only .screen-action-group {
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+}
+body.is-screen-only #only-theater-actions {
+  display: inline-flex;
 }
 </style>
 </head>
@@ -497,30 +795,78 @@ button.danger:hover { background: rgba(248, 81, 73, .22); }
       <div class="box-title-row box-title-clickable" id="screen-header">
         <h2>Screen preview</h2>
         <div class="box-header-actions">
+          <a id="link-standalone" href="#screen" target="_blank" rel="noopener" class="link-pill" title="Open full Screen Preview in a new tab (or right-click / long-press → Open in new tab)">↗ New Tab</a>
+          <button type="button" id="btn-enter-theater" class="btn-mini" title="Expand Screen Preview to full viewport">⛶ Fullscreen</button>
           <button type="button" class="btn-collapse" id="btn-toggle-screen" title="Toggle Screen Preview" aria-label="Toggle Screen Preview" aria-expanded="false">
             <svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"></polyline></svg>
           </button>
         </div>
       </div>
-      <p class="header-notice">Live screen preview from the TV. Captures the current display for headless control.</p>
+      <p class="header-notice">Interactive live TV display — tap, double-tap, hold, or drag directly on the preview to control the TV.</p>
     </div>
     <div id="screen-body">
-      <div class="screen-frame">
-        <img id="screen-img" src="" alt="TV Screen">
-        <div id="screen-spinner" style="display:none;padding:var(--s5);text-align:center;color:var(--muted);font-size:var(--fs-s)">Capturing screen from TV…</div>
+      <div id="standalone-banner">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+          <strong style="font-size:var(--fs-xs);color:#79c0ff">↗ Open outside Vetro's small iframe</strong>
+          <button type="button" id="btn-close-standalone" class="btn-mini" style="height:22px;min-height:22px;padding:0 6px">✕</button>
+        </div>
+        <p style="margin:4px 0 0;font-size:var(--fs-xs);color:var(--text)">
+          URL copied! Paste it into a new browser tab, or <strong>right-click / long-press "↗ New Tab"</strong> above and choose <em>Open in new tab</em>:
+        </p>
+        <div class="standalone-row">
+          <input type="text" id="standalone-url-input" readonly>
+          <button type="button" id="btn-copy-screen-url" class="btn-mini active">📋 Screen Fullscreen URL</button>
+          <button type="button" id="btn-copy-plugin-url" class="btn-mini">📋 Full Plugin URL</button>
+        </div>
+      </div>
+      <div class="screen-stage" id="screen-stage">
+        <div class="screen-frame" id="screen-frame">
+          <img id="screen-img" src="" alt="TV Screen" draggable="false">
+          <div id="tv-cursor" aria-hidden="true"></div>
+          <div id="dpad-overlay" aria-hidden="true">
+            <span class="dpad-zone-hint dpad-zone-up">▲</span>
+            <span class="dpad-zone-hint dpad-zone-down">▼</span>
+            <span class="dpad-zone-hint dpad-zone-left">◀</span>
+            <span class="dpad-zone-hint dpad-zone-right">▶</span>
+            <div class="dpad-zone-center">OK</div>
+          </div>
+          <div id="screen-spinner" style="display:none;padding:var(--s5);text-align:center;color:var(--muted);font-size:var(--fs-s)">Capturing screen from TV…</div>
+        </div>
       </div>
       <div class="screen-controls">
         <div class="screen-info-group">
-          <span id="screen-time" style="font-size:var(--fs-s);color:var(--muted)"></span>
+          <div class="mode-switch" role="group" aria-label="Preview input mode">
+            <button type="button" id="btn-mode-pointer" class="active" title="Simulate TV mouse cursor (Browser &amp; pointer apps)">🖱 Pointer</button>
+            <button type="button" id="btn-mode-dpad" title="Swipe or tap zones for D-Pad apps without cursor (e.g. YouTube)">🕹 D-Pad</button>
+          </div>
+          <span id="pointer-tools" style="display:inline-flex;align-items:center;gap:6px;flex-wrap:nowrap">
+            <label class="auto-refresh-label" title="Move TV cursor without clicking (useful to reveal hidden video controls)">
+              <input type="checkbox" id="chk-hover-only">
+              <span>Move only</span>
+            </label>
+            <button type="button" id="btn-right-mode" class="btn-mini" title="Make next tap send Right-Click">Right-click</button>
+            <button type="button" id="btn-scroll-up" class="btn-mini" title="Scroll TV wheel up">▲</button>
+            <button type="button" id="btn-scroll-down" class="btn-mini" title="Scroll TV wheel down">▼</button>
+          </span>
+          <span id="dpad-tools" style="display:none;align-items:center;gap:6px">
+            <button type="button" id="btn-preview-back" class="btn-mini" title="Send Back to TV">↩ Back</button>
+          </span>
           <label class="auto-refresh-label">
             <input type="checkbox" id="chk-auto-refresh">
             <span>Auto-refresh</span>
           </label>
+          <span id="screen-time" style="font-size:var(--fs-xs);color:var(--muted);white-space:nowrap"></span>
         </div>
-        <div>
-          <button type="button" id="btn-refresh-screen" class="primary" style="font-size:var(--fs-s);padding:4px 12px">🔄 Capture / Refresh</button>
+        <div class="screen-action-group">
+          <span id="only-theater-actions">
+            <button type="button" id="btn-rotate-screen" class="btn-mini" title="Rotate 90° into landscape (useful on mobile with rotation locked)">↻ Rotate</button>
+            <button type="button" id="btn-native-fs" class="btn-mini" title="Toggle browser Fullscreen &amp; landscape orientation">⛶ OS Fullscreen</button>
+            <button type="button" id="btn-exit-theater" class="btn-mini" title="Show full Keyboard &amp; Remote plugin">🎛 Full Plugin</button>
+          </span>
+          <button type="button" id="btn-refresh-screen" class="primary" style="font-size:var(--fs-xs);height:28px;min-height:28px;padding:0 10px">🔄 Capture / Refresh</button>
         </div>
       </div>
+      <p id="screen-hint" class="screen-hint">Tap: click · Double-tap: double-click · Hold or drag: press &amp; drag · Right-click or Shift+Wheel supported</p>
     </div>
   </div>
 
@@ -704,6 +1050,7 @@ var tvToken = null;
 var ws = null;
 var wsConnected = false;
 var wsConnecting = false;
+var wsMouseReady = false;
 var activePort = null;
 var activeHoldKey = null;
 
@@ -953,7 +1300,15 @@ function initWS(forcePort) {
       if (msg.event === "ms.channel.connect") {
         wsConnected = true;
         wsConnecting = false;
+        wsMouseReady = false;
         activePort = port;
+        try {
+          currentWs.send(JSON.stringify({
+            method: "ms.remote.control",
+            params: { Cmd: "Create", TypeOfRemote: "CreateMouseDevice" }
+          }));
+          wsMouseReady = true;
+        } catch (mErr) {}
         var t = msg.data && msg.data.token ? String(msg.data.token) : null;
         if (t && t !== tvToken) {
           tvToken = t;
@@ -968,6 +1323,7 @@ function initWS(forcePort) {
       } else if (msg.event === "ms.channel.unauthorized") {
         wsConnected = false;
         wsConnecting = false;
+        wsMouseReady = false;
         tvToken = null;
         fetch("savetoken", {
           method: "POST",
@@ -984,6 +1340,7 @@ function initWS(forcePort) {
     clearTimeout(connTimer);
     wsConnected = false;
     wsConnecting = false;
+    wsMouseReady = false;
     if (!opened && port === 8002) {
       initWS(8001);
     } else if (!opened) {
@@ -995,6 +1352,7 @@ function initWS(forcePort) {
     clearTimeout(connTimer);
     wsConnected = false;
     wsConnecting = false;
+    wsMouseReady = false;
   };
 }
 
@@ -1241,22 +1599,747 @@ if (btnTogglePlayback && boxPlayback) {
   } catch (err) {}
 }
 
-// Screen preview logic
+// Screen preview, interactive pointer / D-Pad, standalone tab & fullscreen orientation logic
 var boxScreen = document.getElementById("box-screen");
 var btnToggleScreen = document.getElementById("btn-toggle-screen");
 var screenHeader = document.getElementById("screen-header");
+var screenStage = document.getElementById("screen-stage");
+var screenFrame = document.getElementById("screen-frame");
 var screenImg = document.getElementById("screen-img");
+var tvCursor = document.getElementById("tv-cursor");
 var screenSpinner = document.getElementById("screen-spinner");
 var screenTime = document.getElementById("screen-time");
+var screenHint = document.getElementById("screen-hint");
 var btnRefreshScreen = document.getElementById("btn-refresh-screen");
 var chkAutoRefresh = document.getElementById("chk-auto-refresh");
+
+var linkStandalone = document.getElementById("link-standalone");
+var standaloneBanner = document.getElementById("standalone-banner");
+var standaloneUrlInput = document.getElementById("standalone-url-input");
+var btnCopyScreenUrl = document.getElementById("btn-copy-screen-url");
+var btnCopyPluginUrl = document.getElementById("btn-copy-plugin-url");
+var btnCloseStandalone = document.getElementById("btn-close-standalone");
+var btnEnterTheater = document.getElementById("btn-enter-theater");
+var btnExitTheater = document.getElementById("btn-exit-theater");
+var btnRotateScreen = document.getElementById("btn-rotate-screen");
+var btnNativeFs = document.getElementById("btn-native-fs");
+
+var btnModePointer = document.getElementById("btn-mode-pointer");
+var btnModeDpad = document.getElementById("btn-mode-dpad");
+var pointerTools = document.getElementById("pointer-tools");
+var dpadTools = document.getElementById("dpad-tools");
+var chkHoverOnly = document.getElementById("chk-hover-only");
+var btnRightMode = document.getElementById("btn-right-mode");
+var btnScrollUp = document.getElementById("btn-scroll-up");
+var btnScrollDown = document.getElementById("btn-scroll-down");
+var btnPreviewBack = document.getElementById("btn-preview-back");
+
 var screenCapturing = false;
+var hasScreenImage = false;
 var autoRefreshTimer = null;
+var previewMode = "pointer";
+var rightClickArmed = false;
+var isScreenOnly = false;
+var isRotatedLandscape = false;
+var isStandaloneTab = false;
+try { isStandaloneTab = (window.self === window.top); } catch (e) { isStandaloneTab = false; }
+
+var basePluginUrl = location.href.split("#")[0];
+var standaloneScreenUrl = basePluginUrl + "#screen";
+
+var curTvX = 960;
+var curTvY = 540;
+var lastTapTime = 0;
+var lastTapX = -100;
+var lastTapY = -100;
+
+var ptrActive = false;
+var ptrId = null;
+var ptrDownClientX = 0;
+var ptrDownClientY = 0;
+var ptrLastClientX = 0;
+var ptrLastClientY = 0;
+var ptrDownTv = null;
+var ptrHoldTimer = null;
+var ptrIsButtonDown = false;
+var ptrIsDragging = false;
+var ptrLastDragSend = 0;
+var dpadAccX = 0;
+var dpadAccY = 0;
+var dpadSwiped = false;
+
+function copyTextToClipboard(str, inputEl) {
+  if (inputEl) {
+    inputEl.value = str;
+    inputEl.focus();
+    inputEl.select();
+  } else {
+    var tmp = document.createElement("input");
+    tmp.value = str;
+    tmp.style.position = "fixed";
+    tmp.style.opacity = "0";
+    document.body.appendChild(tmp);
+    tmp.focus();
+    tmp.select();
+    try { document.execCommand("copy"); } catch (e) {}
+    document.body.removeChild(tmp);
+    return;
+  }
+  try { document.execCommand("copy"); } catch (e) {}
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(str).catch(function () {});
+  }
+}
+
+function fitScreenFrame() {
+  if (!screenFrame || !screenStage) return;
+  if (!isScreenOnly) {
+    screenFrame.style.width = "";
+    screenFrame.style.height = "";
+    return;
+  }
+  var sw = screenStage.clientWidth - 4;
+  var sh = screenStage.clientHeight - 4;
+  if (sw <= 0 || sh <= 0) return;
+  var w = Math.min(sw, Math.floor(sh * 16 / 9));
+  var h = Math.floor(w * 9 / 16);
+  screenFrame.style.width = w + "px";
+  screenFrame.style.height = h + "px";
+}
+
+function setRotatedLandscape(on) {
+  isRotatedLandscape = !!on;
+  document.body.classList.toggle("is-rotated-landscape", isRotatedLandscape);
+  if (btnRotateScreen) btnRotateScreen.classList.toggle("active", isRotatedLandscape);
+  setTimeout(fitScreenFrame, 20);
+}
+
+function setScreenOnlyMode(on, syncHash) {
+  isScreenOnly = !!on;
+  document.body.classList.toggle("is-screen-only", isScreenOnly);
+  if (!isScreenOnly && isRotatedLandscape) {
+    setRotatedLandscape(false);
+  }
+  if (isScreenOnly) {
+    boxScreen.classList.remove("is-collapsed");
+    if (btnToggleScreen) btnToggleScreen.setAttribute("aria-expanded", "true");
+    if (!hasScreenImage && !screenCapturing) {
+      fetchScreenshot();
+    }
+  }
+  if (syncHash) {
+    try {
+      if (history && history.replaceState) {
+        history.replaceState(null, "", isScreenOnly ? "#screen" : basePluginUrl);
+      }
+    } catch (e) {}
+  }
+  fitScreenFrame();
+  setTimeout(fitScreenFrame, 40);
+}
+
+if (linkStandalone) {
+  linkStandalone.href = standaloneScreenUrl;
+  if (isStandaloneTab) {
+    linkStandalone.style.display = "none";
+  }
+  linkStandalone.addEventListener("click", function (e) {
+    e.stopPropagation();
+    var openedWin = null;
+    try { openedWin = window.open(standaloneScreenUrl, "_blank"); } catch (err) {}
+    if (!openedWin) {
+      e.preventDefault();
+      if (boxScreen.classList.contains("is-collapsed")) {
+        toggleScreenCollapse();
+      }
+      if (standaloneBanner && standaloneUrlInput) {
+        standaloneBanner.style.display = "block";
+        copyTextToClipboard(standaloneScreenUrl, standaloneUrlInput);
+        if (btnCopyScreenUrl) btnCopyScreenUrl.classList.add("active");
+        if (btnCopyPluginUrl) btnCopyPluginUrl.classList.remove("active");
+      }
+    }
+  });
+}
+
+if (btnCopyScreenUrl) {
+  btnCopyScreenUrl.onclick = function () {
+    copyTextToClipboard(standaloneScreenUrl, standaloneUrlInput);
+    btnCopyScreenUrl.classList.add("active");
+    if (btnCopyPluginUrl) btnCopyPluginUrl.classList.remove("active");
+    btnCopyScreenUrl.textContent = "✔ Copied Screen URL";
+    setTimeout(function () { btnCopyScreenUrl.textContent = "📋 Screen Fullscreen URL"; }, 1600);
+  };
+}
+if (btnCopyPluginUrl) {
+  btnCopyPluginUrl.onclick = function () {
+    copyTextToClipboard(basePluginUrl, standaloneUrlInput);
+    btnCopyPluginUrl.classList.add("active");
+    if (btnCopyScreenUrl) btnCopyScreenUrl.classList.remove("active");
+    btnCopyPluginUrl.textContent = "✔ Copied Plugin URL";
+    setTimeout(function () { btnCopyPluginUrl.textContent = "📋 Full Plugin URL"; }, 1600);
+  };
+}
+if (btnCloseStandalone && standaloneBanner) {
+  btnCloseStandalone.onclick = function () {
+    standaloneBanner.style.display = "none";
+  };
+}
+
+if (btnEnterTheater) {
+  btnEnterTheater.addEventListener("click", function (e) {
+    e.stopPropagation();
+    setScreenOnlyMode(true, true);
+  });
+}
+if (btnExitTheater) {
+  btnExitTheater.onclick = function () {
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      try {
+        if (document.exitFullscreen) document.exitFullscreen();
+        else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+      } catch (e) {}
+    }
+    setScreenOnlyMode(false, true);
+  };
+}
+if (btnRotateScreen) {
+  btnRotateScreen.onclick = function () {
+    setRotatedLandscape(!isRotatedLandscape);
+  };
+}
+
+if (btnNativeFs) {
+  var canFs = !!(isStandaloneTab && (document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen));
+  if (!canFs) {
+    btnNativeFs.style.display = "none";
+  } else {
+    btnNativeFs.onclick = function () {
+      var fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+      if (!fsEl) {
+        var reqFs = document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen;
+        try {
+          var p = reqFs.call(document.documentElement);
+          if (p && p.then) {
+            p.then(function () {
+              if (screen.orientation && screen.orientation.lock) {
+                screen.orientation.lock("landscape").catch(function () {});
+              }
+              setRotatedLandscape(false);
+              setTimeout(fitScreenFrame, 80);
+            }).catch(function () {});
+          }
+        } catch (err) {}
+      } else {
+        try {
+          if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock();
+        } catch (err2) {}
+        try {
+          if (document.exitFullscreen) document.exitFullscreen();
+          else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+        } catch (err3) {}
+      }
+    };
+  }
+}
+
+document.addEventListener("fullscreenchange", function () {
+  var fsActive = !!(document.fullscreenElement || document.webkitFullscreenElement);
+  if (btnNativeFs) btnNativeFs.classList.toggle("active", fsActive);
+  setTimeout(fitScreenFrame, 60);
+});
+
+window.addEventListener("resize", function () {
+  if (isScreenOnly) {
+    if (isRotatedLandscape && window.innerWidth > window.innerHeight + 40) {
+      setRotatedLandscape(false);
+    } else {
+      fitScreenFrame();
+    }
+  }
+});
+window.addEventListener("orientationchange", function () {
+  setTimeout(function () {
+    if (isScreenOnly) {
+      if (isRotatedLandscape && window.innerWidth > window.innerHeight + 40) {
+        setRotatedLandscape(false);
+      } else {
+        fitScreenFrame();
+      }
+    }
+  }, 120);
+});
+window.addEventListener("hashchange", function () {
+  if (location.hash === "#screen" && !isScreenOnly) {
+    setScreenOnlyMode(true, false);
+  } else if (location.hash !== "#screen" && isScreenOnly) {
+    setScreenOnlyMode(false, false);
+  }
+});
+
+function showCursorMarker(pctX, pctY, holding) {
+  if (!tvCursor || previewMode !== "pointer") return;
+  tvCursor.style.display = "block";
+  tvCursor.style.left = pctX.toFixed(2) + "%";
+  tvCursor.style.top = pctY.toFixed(2) + "%";
+  if (holding) {
+    tvCursor.classList.add("is-holding");
+  } else {
+    tvCursor.classList.remove("is-holding");
+  }
+}
+
+function spawnRipple(pctX, pctY, altColor) {
+  if (!screenFrame) return;
+  var r = document.createElement("div");
+  r.className = altColor ? "click-ripple ripple-alt" : "click-ripple";
+  r.style.left = pctX.toFixed(2) + "%";
+  r.style.top = pctY.toFixed(2) + "%";
+  screenFrame.appendChild(r);
+  setTimeout(function () {
+    if (r.parentNode) r.parentNode.removeChild(r);
+  }, 450);
+}
+
+function getTvCoords(clientX, clientY) {
+  var rect = screenImg.getBoundingClientRect();
+  if (!rect.width || !rect.height) {
+    return { x: 960, y: 540, pctX: 50, pctY: 50, relX: 0.5, relY: 0.5 };
+  }
+  var relX, relY;
+  if (isRotatedLandscape) {
+    relX = (clientY - rect.top) / rect.height;
+    relY = 1 - ((clientX - rect.left) / rect.width);
+  } else {
+    relX = (clientX - rect.left) / rect.width;
+    relY = (clientY - rect.top) / rect.height;
+  }
+  if (relX < 0) relX = 0; else if (relX > 1) relX = 1;
+  if (relY < 0) relY = 0; else if (relY > 1) relY = 1;
+  return {
+    x: Math.max(0, Math.min(1919, Math.round(relX * 1919))),
+    y: Math.max(0, Math.min(1079, Math.round(relY * 1079))),
+    pctX: relX * 100,
+    pctY: relY * 100,
+    relX: relX,
+    relY: relY
+  };
+}
+
+function ensureWsMouse() {
+  if (!wsConnected || !ws || ws.readyState !== WebSocket.OPEN) return false;
+  if (!wsMouseReady) {
+    try {
+      ws.send(JSON.stringify({
+        method: "ms.remote.control",
+        params: { Cmd: "Create", TypeOfRemote: "CreateMouseDevice" }
+      }));
+      wsMouseReady = true;
+    } catch (e) {
+      wsConnected = false;
+      wsMouseReady = false;
+      return false;
+    }
+  }
+  return true;
+}
+
+function wsSendMouseMove(dx, dy) {
+  ws.send(JSON.stringify({
+    method: "ms.remote.control",
+    params: {
+      Cmd: "Move",
+      Position: { x: String(dx), y: String(dy) },
+      TypeOfRemote: "ProcessMouseDevice"
+    }
+  }));
+}
+
+function wsSendMouseBtn(cmd) {
+  ws.send(JSON.stringify({
+    method: "ms.remote.control",
+    params: { Cmd: cmd, TypeOfRemote: "ProcessMouseDevice" }
+  }));
+}
+
+function wsJumpCursor(tx, ty) {
+  wsSendMouseMove(-2000, -2000);
+  wsSendMouseMove(-2000, -2000);
+  if (tx < 36 && ty < 36 && (tx > 0 || ty > 0)) {
+    wsSendMouseMove(100, 100);
+    wsSendMouseMove(Math.round((tx - 200) / 2), Math.round((ty - 200) / 2));
+  } else if (tx > 0 || ty > 0) {
+    wsSendMouseMove(Math.round(tx / 2), Math.round(ty / 2));
+  }
+  curTvX = tx;
+  curTvY = ty;
+}
+
+function postMouseFallback(payload) {
+  return fetch("mouse", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  }).catch(function () {});
+}
+
+function tvMouseJumpAndAct(tx, ty, actionName) {
+  if (actionName === "wheel") {
+    return postMouseFallback({ action: "wheel", x: tx, y: ty, delta: -1 });
+  }
+  if (ensureWsMouse()) {
+    try {
+      if (actionName === "clickInPlace") {
+        wsSendMouseBtn("LeftClick");
+      } else {
+        wsJumpCursor(tx, ty);
+        if (actionName === "click") wsSendMouseBtn("LeftClick");
+        else if (actionName === "rightclick") wsSendMouseBtn("RightClick");
+        else if (actionName === "down") wsSendMouseBtn("Press");
+      }
+      return;
+    } catch (e) {
+      wsConnected = false;
+      wsMouseReady = false;
+    }
+  }
+  postMouseFallback({ action: actionName, x: tx, y: ty });
+  curTvX = tx;
+  curTvY = ty;
+}
+
+function tvMouseStepDelta(targetX, targetY) {
+  var dxTv = targetX - curTvX;
+  var dyTv = targetY - curTvY;
+  var dist = Math.sqrt(dxTv * dxTv + dyTv * dyTv);
+  if (dist < 2) return;
+  var scale = dist >= 40 ? 0.5 : (dist >= 14 ? 0.58 : 0.72);
+  var sx = Math.round(dxTv * scale);
+  var sy = Math.round(dyTv * scale);
+  if (sx === 0 && sy === 0) return;
+
+  if (ensureWsMouse()) {
+    try {
+      wsSendMouseMove(sx, sy);
+      curTvX = Math.max(0, Math.min(1919, Math.round(curTvX + sx / scale)));
+      curTvY = Math.max(0, Math.min(1079, Math.round(curTvY + sy / scale)));
+      return;
+    } catch (e) {
+      wsConnected = false;
+      wsMouseReady = false;
+    }
+  }
+  postMouseFallback({ action: "drag", dx: sx, dy: sy });
+  curTvX = targetX;
+  curTvY = targetY;
+}
+
+function tvMouseRelease() {
+  if (ensureWsMouse()) {
+    try {
+      wsSendMouseBtn("Release");
+      return;
+    } catch (e) {
+      wsConnected = false;
+      wsMouseReady = false;
+    }
+  }
+  postMouseFallback({ action: "up" });
+}
+
+function tvMouseWheel(delta, coords) {
+  var payload = { action: "wheel", delta: delta };
+  if (coords) {
+    payload.x = coords.x;
+    payload.y = coords.y;
+    curTvX = coords.x;
+    curTvY = coords.y;
+    showCursorMarker(coords.pctX, coords.pctY, false);
+  }
+  postMouseFallback(payload);
+  screenTime.textContent = (delta > 0 ? "Scrolled ▲" : "Scrolled ▼") + " (" + curTvX + ", " + curTvY + ")";
+}
+
+function setPreviewMode(mode) {
+  previewMode = (mode === "dpad") ? "dpad" : "pointer";
+  if (btnModePointer) btnModePointer.classList.toggle("active", previewMode === "pointer");
+  if (btnModeDpad) btnModeDpad.classList.toggle("active", previewMode === "dpad");
+  if (pointerTools) pointerTools.style.display = (previewMode === "pointer") ? "inline-flex" : "none";
+  if (dpadTools) dpadTools.style.display = (previewMode === "dpad") ? "inline-flex" : "none";
+  if (screenFrame) screenFrame.classList.toggle("is-dpad-mode", previewMode === "dpad");
+  if (tvCursor && previewMode !== "pointer") tvCursor.style.display = "none";
+  if (screenHint) {
+    screenHint.textContent = (previewMode === "dpad")
+      ? "D-Pad mode (YouTube & TV apps): Swipe to move focus · Tap edges (▲▼◀▶) or center (OK) · Right-click: Back"
+      : "Tap: click · Double-tap: double-click · Hold or drag: press & drag · Right-click or Shift+Wheel supported";
+  }
+  try { localStorage.setItem("vetro_preview_mode", previewMode); } catch (e) {}
+  if (isScreenOnly) fitScreenFrame();
+}
+
+try {
+  if (localStorage.getItem("vetro_preview_mode") === "dpad") {
+    setPreviewMode("dpad");
+  }
+} catch (e) {}
+
+if (btnModePointer) {
+  btnModePointer.onclick = function () { setPreviewMode("pointer"); };
+}
+if (btnModeDpad) {
+  btnModeDpad.onclick = function () { setPreviewMode("dpad"); };
+}
+if (btnRightMode) {
+  btnRightMode.onclick = function () {
+    rightClickArmed = !rightClickArmed;
+    btnRightMode.classList.toggle("active", rightClickArmed);
+  };
+}
+if (btnScrollUp) {
+  btnScrollUp.onclick = function () { tvMouseWheel(1, null); };
+}
+if (btnScrollDown) {
+  btnScrollDown.onclick = function () { tvMouseWheel(-1, null); };
+}
+if (btnPreviewBack) {
+  btnPreviewBack.onclick = function () {
+    sendKey("XF86Back");
+    screenTime.textContent = "Sent Back";
+  };
+}
+
+function isPreviewInteractive() {
+  return !!(hasScreenImage && screenImg && screenFrame);
+}
+
+if (screenFrame) {
+  screenFrame.addEventListener("contextmenu", function (e) {
+    if (!isPreviewInteractive()) return;
+    e.preventDefault();
+    var c = getTvCoords(e.clientX, e.clientY);
+    spawnRipple(c.pctX, c.pctY, true);
+    if (previewMode === "dpad") {
+      sendKey("XF86Back");
+      screenTime.textContent = "D-Pad Back";
+      return;
+    }
+    showCursorMarker(c.pctX, c.pctY, false);
+    tvMouseJumpAndAct(c.x, c.y, "rightclick");
+    screenTime.textContent = "Right-click (" + c.x + ", " + c.y + ")";
+  });
+
+  screenFrame.addEventListener("wheel", function (e) {
+    if (!isPreviewInteractive() || previewMode !== "pointer") return;
+    if (!e.shiftKey && !e.altKey && !e.ctrlKey) return;
+    e.preventDefault();
+    var c = getTvCoords(e.clientX, e.clientY);
+    tvMouseWheel(e.deltaY < 0 ? 1 : -1, c);
+  }, { passive: false });
+
+  screenFrame.addEventListener("pointerdown", function (e) {
+    if (!isPreviewInteractive()) return;
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    e.preventDefault();
+    try { screenFrame.setPointerCapture(e.pointerId); } catch (err) {}
+
+    ptrActive = true;
+    ptrId = e.pointerId;
+    ptrDownClientX = e.clientX;
+    ptrDownClientY = e.clientY;
+    ptrLastClientX = e.clientX;
+    ptrLastClientY = e.clientY;
+    ptrDownTv = getTvCoords(e.clientX, e.clientY);
+    ptrIsButtonDown = false;
+    ptrIsDragging = false;
+    dpadAccX = 0;
+    dpadAccY = 0;
+    dpadSwiped = false;
+
+    if (ptrHoldTimer) clearTimeout(ptrHoldTimer);
+
+    if (previewMode === "pointer") {
+      var hoverOnly = (chkHoverOnly && chkHoverOnly.checked) || e.altKey;
+      showCursorMarker(ptrDownTv.pctX, ptrDownTv.pctY, false);
+      if (!hoverOnly && !rightClickArmed) {
+        ptrHoldTimer = setTimeout(function () {
+          ptrHoldTimer = null;
+          if (!ptrActive || ptrIsDragging) return;
+          ptrIsButtonDown = true;
+          showCursorMarker(ptrDownTv.pctX, ptrDownTv.pctY, true);
+          tvMouseJumpAndAct(ptrDownTv.x, ptrDownTv.y, "down");
+          screenTime.textContent = "Holding (" + ptrDownTv.x + ", " + ptrDownTv.y + ")…";
+        }, 300);
+      }
+    }
+  });
+
+  screenFrame.addEventListener("pointermove", function (e) {
+    if (!ptrActive || e.pointerId !== ptrId) return;
+    e.preventDefault();
+    var rawDx = e.clientX - ptrDownClientX;
+    var rawDy = e.clientY - ptrDownClientY;
+    var stepDx = e.clientX - ptrLastClientX;
+    var stepDy = e.clientY - ptrLastClientY;
+    ptrLastClientX = e.clientX;
+    ptrLastClientY = e.clientY;
+
+    if (previewMode === "dpad") {
+      if (isRotatedLandscape) {
+        dpadAccX += stepDy;
+        dpadAccY += -stepDx;
+      } else {
+        dpadAccX += stepDx;
+        dpadAccY += stepDy;
+      }
+      var stepPx = 56;
+      if (Math.abs(rawDx) >= 14 || Math.abs(rawDy) >= 14) {
+        while (Math.abs(dpadAccX) >= stepPx || Math.abs(dpadAccY) >= stepPx) {
+          dpadSwiped = true;
+          if (Math.abs(dpadAccX) >= Math.abs(dpadAccY)) {
+            var dirX = dpadAccX > 0 ? "Right" : "Left";
+            sendKey(dirX);
+            screenTime.textContent = "D-Pad " + dirX;
+            dpadAccX += (dpadAccX > 0 ? -stepPx : stepPx);
+          } else {
+            var dirY = dpadAccY > 0 ? "Down" : "Up";
+            sendKey(dirY);
+            screenTime.textContent = "D-Pad " + dirY;
+            dpadAccY += (dpadAccY > 0 ? -stepPx : stepPx);
+          }
+        }
+      }
+      return;
+    }
+
+    var distClient = Math.sqrt(rawDx * rawDx + rawDy * rawDy);
+    if (!ptrIsDragging && distClient >= 6) {
+      ptrIsDragging = true;
+      if (ptrHoldTimer) {
+        clearTimeout(ptrHoldTimer);
+        ptrHoldTimer = null;
+      }
+      var hoverMoveOnly = (chkHoverOnly && chkHoverOnly.checked) || e.altKey;
+      if (!ptrIsButtonDown) {
+        if (hoverMoveOnly) {
+          tvMouseJumpAndAct(ptrDownTv.x, ptrDownTv.y, "move");
+        } else {
+          ptrIsButtonDown = true;
+          tvMouseJumpAndAct(ptrDownTv.x, ptrDownTv.y, "down");
+        }
+      }
+    }
+
+    if (ptrIsDragging) {
+      var cur = getTvCoords(e.clientX, e.clientY);
+      showCursorMarker(cur.pctX, cur.pctY, ptrIsButtonDown);
+      var now = Date.now();
+      if (now - ptrLastDragSend >= 20) {
+        ptrLastDragSend = now;
+        tvMouseStepDelta(cur.x, cur.y);
+        screenTime.textContent = (ptrIsButtonDown ? "Dragging (" : "Moving (") + cur.x + ", " + cur.y + ")…";
+      }
+    }
+  });
+
+  function finishPointerGesture(e, cancelled) {
+    if (!ptrActive || e.pointerId !== ptrId) return;
+    ptrActive = false;
+    if (ptrHoldTimer) {
+      clearTimeout(ptrHoldTimer);
+      ptrHoldTimer = null;
+    }
+    try { screenFrame.releasePointerCapture(e.pointerId); } catch (err) {}
+
+    var endCoords = getTvCoords(e.clientX, e.clientY);
+
+    if (previewMode === "dpad") {
+      if (!cancelled && !dpadSwiped) {
+        spawnRipple(endCoords.pctX, endCoords.pctY, false);
+        var rx = endCoords.relX;
+        var ry = endCoords.relY;
+        var dpadKey;
+        if (rx >= 0.34 && rx <= 0.66 && ry >= 0.28 && ry <= 0.72) {
+          dpadKey = "Return";
+        } else if (Math.abs(rx - 0.5) > Math.abs(ry - 0.5)) {
+          dpadKey = rx < 0.5 ? "Left" : "Right";
+        } else {
+          dpadKey = ry < 0.5 ? "Up" : "Down";
+        }
+        sendKey(dpadKey);
+        screenTime.textContent = "D-Pad " + (dpadKey === "Return" ? "OK" : dpadKey);
+      }
+      return;
+    }
+
+    if (ptrIsDragging) {
+      tvMouseStepDelta(endCoords.x, endCoords.y);
+      if (ptrIsButtonDown) {
+        tvMouseRelease();
+        ptrIsButtonDown = false;
+      }
+      showCursorMarker(endCoords.pctX, endCoords.pctY, false);
+      screenTime.textContent = "Moved to (" + endCoords.x + ", " + endCoords.y + ")";
+      return;
+    }
+
+    if (ptrIsButtonDown) {
+      tvMouseRelease();
+      ptrIsButtonDown = false;
+      showCursorMarker(endCoords.pctX, endCoords.pctY, false);
+      screenTime.textContent = "Released (" + endCoords.x + ", " + endCoords.y + ")";
+      return;
+    }
+
+    if (cancelled) return;
+
+    showCursorMarker(endCoords.pctX, endCoords.pctY, false);
+    var hoverOnlyTap = (chkHoverOnly && chkHoverOnly.checked) || e.altKey;
+    if (hoverOnlyTap) {
+      spawnRipple(endCoords.pctX, endCoords.pctY, true);
+      tvMouseJumpAndAct(endCoords.x, endCoords.y, "move");
+      screenTime.textContent = "Moved cursor (" + endCoords.x + ", " + endCoords.y + ")";
+      return;
+    }
+
+    if (rightClickArmed) {
+      rightClickArmed = false;
+      if (btnRightMode) btnRightMode.classList.remove("active");
+      spawnRipple(endCoords.pctX, endCoords.pctY, true);
+      tvMouseJumpAndAct(endCoords.x, endCoords.y, "rightclick");
+      screenTime.textContent = "Right-click (" + endCoords.x + ", " + endCoords.y + ")";
+      return;
+    }
+
+    var nowTap = Date.now();
+    var tapDist = Math.sqrt((endCoords.x - lastTapX) * (endCoords.x - lastTapX) + (endCoords.y - lastTapY) * (endCoords.y - lastTapY));
+    if (nowTap - lastTapTime < 350 && tapDist < 34) {
+      lastTapTime = 0;
+      spawnRipple(endCoords.pctX, endCoords.pctY, true);
+      tvMouseJumpAndAct(endCoords.x, endCoords.y, "clickInPlace");
+      screenTime.textContent = "Double-click (" + endCoords.x + ", " + endCoords.y + ")";
+      return;
+    }
+
+    lastTapTime = nowTap;
+    lastTapX = endCoords.x;
+    lastTapY = endCoords.y;
+    spawnRipple(endCoords.pctX, endCoords.pctY, false);
+    tvMouseJumpAndAct(endCoords.x, endCoords.y, "click");
+    screenTime.textContent = "Click (" + endCoords.x + ", " + endCoords.y + ")";
+  }
+
+  screenFrame.addEventListener("pointerup", function (e) {
+    finishPointerGesture(e, false);
+  });
+  screenFrame.addEventListener("pointercancel", function (e) {
+    finishPointerGesture(e, true);
+  });
+}
 
 function fetchScreenshot() {
   if (screenCapturing) return;
   screenCapturing = true;
-  if (!screenImg.src || screenImg.style.display === "none") {
+  if (!hasScreenImage) {
     screenSpinner.textContent = "Capturing screen from TV…";
     screenSpinner.style.display = "block";
   } else {
@@ -1268,8 +2351,10 @@ function fetchScreenshot() {
   var img = new Image();
   var url = "screenshot?t=" + Date.now();
   img.onload = function () {
+    hasScreenImage = true;
     screenImg.src = url;
     screenImg.style.display = "block";
+    if (screenFrame) screenFrame.classList.add("has-image");
     screenSpinner.style.display = "none";
     screenCapturing = false;
     btnRefreshScreen.disabled = false;
@@ -1277,13 +2362,14 @@ function fetchScreenshot() {
     var d = new Date();
     var pad = function (n) { return (n < 10 ? "0" : "") + n; };
     screenTime.textContent = "Captured at " + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+    if (isScreenOnly) fitScreenFrame();
 
-    if (chkAutoRefresh && chkAutoRefresh.checked && !boxScreen.classList.contains("is-collapsed")) {
+    if (chkAutoRefresh && chkAutoRefresh.checked && (!boxScreen.classList.contains("is-collapsed") || isScreenOnly)) {
       autoRefreshTimer = setTimeout(fetchScreenshot, 3500);
     }
   };
   img.onerror = function () {
-    if (!screenImg.src || screenImg.style.display === "none") {
+    if (!hasScreenImage) {
       screenSpinner.textContent = "Failed to capture screen from TV";
     } else {
       screenTime.textContent = "Refresh failed — retrying";
@@ -1292,14 +2378,15 @@ function fetchScreenshot() {
     btnRefreshScreen.disabled = false;
     btnRefreshScreen.textContent = "🔄 Capture / Refresh";
 
-    if (chkAutoRefresh && chkAutoRefresh.checked && !boxScreen.classList.contains("is-collapsed")) {
+    if (chkAutoRefresh && chkAutoRefresh.checked && (!boxScreen.classList.contains("is-collapsed") || isScreenOnly)) {
       autoRefreshTimer = setTimeout(fetchScreenshot, 5000);
     }
   };
   img.src = url;
 }
 
-function toggleScreenCollapse() {
+function toggleScreenCollapse(e) {
+  if (e && e.target && (e.target.closest("#link-standalone") || e.target.closest("#btn-enter-theater"))) return;
   var collapsed = boxScreen.classList.toggle("is-collapsed");
   btnToggleScreen.setAttribute("aria-expanded", collapsed ? "false" : "true");
   if (collapsed) {
@@ -1308,12 +2395,16 @@ function toggleScreenCollapse() {
       autoRefreshTimer = null;
     }
   } else {
-    if (!screenImg.src || screenImg.style.display === "none") {
+    if (!hasScreenImage) {
       fetchScreenshot();
     } else if (chkAutoRefresh && chkAutoRefresh.checked && !screenCapturing) {
       fetchScreenshot();
     }
   }
+}
+
+if (location.hash === "#screen") {
+  setScreenOnlyMode(true, false);
 }
 
 if (btnToggleScreen && boxScreen) {
