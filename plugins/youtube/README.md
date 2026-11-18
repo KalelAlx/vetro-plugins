@@ -26,7 +26,8 @@ optional [DeArrow](https://dearrow.ajay.app) titles. You stay signed in, voice s
 it. Removing the plugin alone leaves the certificate and the copy of the content folder on the TV.
 
 **Tested on:** a Samsung Q80A (firmware 2310.0, Tizen 6.0) rooted with Vetro. Other models should work if they have the Cobalt
-YouTube app (`com.samsung.tv.cobalt-yt`); the plugin says "Samsung YouTube not found" when they do not. Not yet confirmed:
+YouTube app (`com.samsung.tv.cobalt-yt`); the plugin says "Samsung YouTube not found" when they do not. On Tizen 9 the proxy uses the TV's
+network address (*Where the proxy listens*): written from a report on a 2025 Frame, not yet confirmed on a Tizen 9 TV. Not yet confirmed:
 the real remote YouTube key after a cold boot, and long-term behaviour as YouTube changes.
 
 ## How it works
@@ -40,7 +41,7 @@ app_launcher -s com.samsung.tv.cobalt-yt -u 5001 USERDATA ' --base_url=https://w
 
 - **The first four flags** are the ones Samsung's own YouTube tile passes. The proxy list ends in `direct://`: if the proxy is
   down, the app connects directly (unpatched) instead of failing.
-- **The proxy** runs inside Vetro, on `127.0.0.2` only. Every host is a plain tunnel except `www.youtube.com`, whose start page
+- **The proxy** runs inside Vetro (where: see *Where the proxy listens*). Every host is a plain tunnel except `www.youtube.com`, whose start page
   gets one `<script>` tag. If the certificate or the script is missing, the proxy only tunnels: YouTube then runs unpatched
   instead of breaking.
 - **The certificate.** The plugin makes a certificate authority of its own and adds it to a *copy* of the YouTube app's content
@@ -52,6 +53,20 @@ app_launcher -s com.samsung.tv.cobalt-yt -u 5001 USERDATA ' --base_url=https://w
   segments come from the public [SponsorBlock](https://sponsor.ajay.app) database (CC BY-NC-SA 4.0).
 
 `<DIR>` is `/opt/usr/home/owner/share/vetro-youtube`.
+
+## Where the proxy listens
+
+- **Tizen 8 and older: `127.0.0.2`**, on the TV itself, as before. Nothing else on the network can reach it.
+- **Tizen 9 and newer: the TV's own network address** (`192.168.x.y:8101`). Some firmware does not let apps connect to `127.x` at all (a 2025 Frame
+  showed it): the YouTube app then never reaches the proxy and, because the proxy list ends in `direct://`, quietly connects straight to YouTube, so
+  it opens normally, with ads, and the plugin shows `tunnels: 0`. On the network address it works. The proxy then listens on all addresses
+  but **drops every connection that does not come from the TV itself** (loopback or one of the TV's own addresses), so another device on your network
+  cannot use it as a proxy, and nothing but this plugin's own YouTube app talks to it.
+- To choose by hand put `{"proxy": "loopback"}` or `{"proxy": "lan"}` in the plugin's `config.json` (default: automatic) and switch the plugin off and on.
+- `/api/status` shows `proxyMode`, the address and `accepted` (connections the app made to the proxy). **`accepted: 0` after opening YouTube
+  means the app never reached the proxy.** The log says when the first connection came and from where.
+- **Samsung's YouTube button and a long address.** Samsung's start settings take at most 127 characters, and the flags with `192.168.1.123` fill 123. A
+  longer address (`192.168.100.123`) does not fit: the card then says so. The Vetro launcher tile and **Open YouTube** have no such limit.
 
 ## The Vetro launcher tile
 
@@ -112,6 +127,7 @@ Removing the plugin does **not** remove `<DIR>`: press *Remove certificate and f
 - Ads inside videos depend on the script keeping up with YouTube; if they come back, the script needs updating, not the plugin.
 - Unofficial, and YouTube's terms do not allow ad blocking. Use it on your own TV, at your own risk.
 - Port 8101 can be changed with `{"port": 8123}` in the plugin's `config.json`.
+- If the TV's address changes (a new lease from the router), the next start and the check every minute use the new one.
 
 ## Privacy: what it connects to
 

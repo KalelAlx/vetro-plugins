@@ -14,6 +14,8 @@ var proxyLib = require('./proxy.js');
 var setup = require('./setup.js');
 var tile = require('./tile.js');
 var scriptLib = require('./userscript.js');
+var os = require('os');
+var address = require('./address.js');
 
 var PROXY_HOST = '127.0.0.2', DEFAULT_PORT = 8101;
 var TICK_MS = 60 * 1000, SETUP_EVERY_MS = 24 * 3600 * 1000, SCRIPT_RETRY_MS = 5 * 60 * 1000, WATCH_MS = 6000;
@@ -57,6 +59,13 @@ module.exports = function (ctx) {
     var cfg = ctx.config.get();
     var PORT = typeof cfg.port === 'number' && cfg.port % 1 === 0 && cfg.port >= 1024 && cfg.port < 65536 ? cfg.port : DEFAULT_PORT;
     var script = new scriptLib.UserScript(setup.CACHE);
+    // Where the YouTube app reaches the proxy. 'loopback': 127.0.0.2, as it always was. 'lan': the TV's own network address, for
+    // firmware where apps cannot connect to 127.x (then the app silently falls back to a direct connection and the ads stay).
+    // The proxy then listens on every address and takes connections from the TV itself only (see address.js). Fixed when the plugin starts.
+    var MODE = address.chooseMode(cfg.proxy, address.tizenMajor(readText('/etc/tizen-release')));
+    var BIND = MODE === 'lan' ? '0.0.0.0' : PROXY_HOST;
+    // The address put in the app's flags: the TV's own when it has one (it can change with the router), else loopback.
+    function proxyHost() { return MODE === 'lan' ? (address.lanAddress(os.networkInterfaces()) || PROXY_HOST) : PROXY_HOST; }
     var logLines = [], preparing = null, alive = false, timer = null, watchTimer = null;
     var tileOn = cfg.tile === true;
     var lastSetup = 0, nextScriptTry = 0;
@@ -72,6 +81,8 @@ module.exports = function (ctx) {
         try { ctx.config.set(c); } catch (e) { log('config not saved: ' + e.message); }
     }
 
+    function readText(file) { try { return fs.readFileSync(file, 'utf8'); } catch (e) { return ''; } }
+
     function readLeaf() {
         try {
             var key = fs.readFileSync(path.join(setup.DIR, 'leaf.key'));
@@ -82,7 +93,8 @@ module.exports = function (ctx) {
     function contentThere() { try { return fs.statSync(path.join(setup.CONTENT, 'ssl', 'certs')).isDirectory(); } catch (e) { return false; } }
 
     var proxy = proxyLib.createProxy({
-        host: PROXY_HOST, port: PORT, log: log,
+        host: BIND, port: PORT, log: log,
+        allow: MODE === 'lan' ? function (remote) { return address.isLocal(remote, os.networkInterfaces()); } : null,
         leaf: readLeaf,
         script: function () { return script.load(); },
         onPage: function () { st.pages++; st.lastPage = new Date().toISOString().slice(11, 19); }
@@ -158,7 +170,7 @@ module.exports = function (ctx) {
         waiting = serial(function () {
             waiting = null;
             var why = alive ? blocker() : 'the plugin is off';
-            var job = why ? tile.restore(exec) : tile.apply(exec, PROXY_HOST, PORT);
+            var job = why ? tile.restore(exec) : tile.apply(exec, proxyHost(), PORT);
             return job.then(function (state) {
                 if (why) {
                     st.tileState = tileOn && alive ? 'waiting' : 'off'; st.tileNote = tileOn ? why : '';
@@ -175,6 +187,7 @@ module.exports = function (ctx) {
                 restoreTries = 0;
                 if (state === 'patched') { if (st.tileState !== 'on') log('Samsung’s YouTube button now opens the patched app'); st.tileState = 'on'; st.tileNote = ''; }
                 else if (state === 'absent') { st.tileState = 'unsupported'; st.tileNote = 'This TV has no entry for Samsung’s YouTube app that can be changed.'; }
+                else if (state === 'toolong') { st.tileState = 'unsupported'; st.tileNote = 'The TV’s address (' + proxyHost() + ') is too long to fit in Samsung’s YouTube settings. Use the Vetro launcher’s YouTube tile, or the Open button.'; }
                 else if (state === 'foreign') { st.tileState = 'unsupported'; st.tileNote = 'Samsung’s YouTube settings are not in the expected form: left as they are.'; }
                 else { st.tileState = 'error'; st.tileNote = 'The TV’s app list could not be updated (' + state + '); trying again.'; log('row: ' + state); retrySoon(); }
                 if (st.tileState === 'on') bootTries = 0;
@@ -212,7 +225,7 @@ module.exports = function (ctx) {
             if (!/^relaunch$/m.test(out)) { if (out !== lastOut) log('watch: ' + (out.trim() || 'YouTube not running')); lastOut = out; return null; }
             relaunches.push(Date.now());
             log('YouTube was started without the patches: starting it again through the proxy');
-            return ctx.execute(setup.launchScript(PROXY_HOST, PORT), 25000);
+            return ctx.execute(setup.launchScript(proxyHost(), PORT), 25000);
         }).then(function () { watchBusy = false; }, function (e) { watchBusy = false; log('watch: ' + e.message); });
     }
 
@@ -230,7 +243,7 @@ module.exports = function (ctx) {
     // Resolves with { warning } and rejects when YouTube did not start. Used by the Open button and by the launcher tile.
     function openYoutube() {
         var warning = null;
-        return prepare().then(function (r) { warning = r.warning; return ctx.execute(setup.launchScript(PROXY_HOST, PORT), 25000); }).then(function (r) {
+        return prepare().then(function (r) { warning = r.warning; return ctx.execute(setup.launchScript(proxyHost(), PORT), 25000); }).then(function (r) {
             var out = String((r && r.stdout) || '');
             if (!/successfully launched/.test(out)) throw new Error('YouTube did not start: ' + out.replace(/\s+/g, ' ').slice(0, 120));
             log('YouTube started');
@@ -241,8 +254,8 @@ module.exports = function (ctx) {
     function snapshot() {
         var have = script.load(), s = proxy.stats();
         return { setup: st.setup, error: st.error, script: have ? 'ready' : st.script, scriptVersion: scriptLib.VERSION, scriptError: st.scriptError,
-            proxy: proxy.listening() ? 'up' : 'down', proxyAddress: PROXY_HOST + ':' + PORT, proxyError: st.proxyError, pages: st.pages, lastPage: st.lastPage,
-            tileOn: tileOn, tileState: st.tileState, tileNote: st.tileNote, tunnels: s.tunnels, opened: s.opened, live: s.live };
+            proxy: proxy.listening() ? 'up' : 'down', proxyAddress: proxyHost() + ':' + PORT, proxyMode: MODE, proxyError: st.proxyError, pages: st.pages, lastPage: st.lastPage,
+            tileOn: tileOn, tileState: st.tileState, tileNote: st.tileNote, tunnels: s.tunnels, opened: s.opened, live: s.live, accepted: s.accepted, refused: s.refused, foreign: s.foreign };
     }
 
     return {
