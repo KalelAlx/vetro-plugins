@@ -92,6 +92,19 @@
       "size": 74678
     },
     {
+      "id": "tv-reboot",
+      "name": "TV reboot",
+      "version": "1.0.0",
+      "author": "genesai",
+      "description": "A button that restarts the TV. Runs systemctl reboot through the TV agent (needs the exec permission).",
+      "permissions": [
+        "exec"
+      ],
+      "url": "dist/tv-reboot-1.0.0.vplugin",
+      "sha256": "4677a4ef86416289465ae7eb80fd37478c12b130423c26ed2e530dbccc2853d9",
+      "size": 9105
+    },
+    {
       "id": "tv-uptime",
       "name": "TV uptime",
       "version": "1.0.1",
