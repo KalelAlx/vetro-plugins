@@ -10,11 +10,12 @@
 //
 // Continuous Key Repeat:
 //   - WebSocket mode: uses Samsung Remote "Press" and "Release" commands.
-//   - HTTP mode: TV-side hold timer (75ms) triggered by action: "down" / "up",
+//   - HTTP mode: TV-side serialized hold loop (75ms) triggered by action: "down" / "up",
 //     eliminating network congestion.
 
 var fs = require('fs');
 var path = require('path');
+var os = require('os');
 
 var LATIN_MAP = {
     ' ': 'space',
@@ -61,6 +62,68 @@ function loadPage(ctx) {
         try { return fs.readFileSync(places[i], 'utf8'); } catch (e) { /* next */ }
     }
     return '<!doctype html><meta charset="utf-8"><p>Page file missing: reinstall this Shard.</p>';
+}
+
+function getTvIp() {
+    try {
+        var ifaces = os.networkInterfaces();
+        for (var name in ifaces) {
+            var list = ifaces[name];
+            if (!list) continue;
+            for (var i = 0; i < list.length; i++) {
+                var addr = list[i];
+                if (addr.family === 'IPv4' && !addr.internal && addr.address !== '127.0.0.1') {
+                    return addr.address;
+                }
+            }
+        }
+    } catch (e) {}
+    return null;
+}
+
+function readJson(req, maxBytes, callback) {
+    var limit = maxBytes || 4096;
+    var body = '';
+    var done = false;
+
+    function finish(err, res) {
+        if (done) return;
+        done = true;
+        req.removeListener('data', onData);
+        req.removeListener('end', onEnd);
+        req.removeListener('error', onError);
+        callback(err, res);
+    }
+
+    function onError(err) {
+        finish(err || new Error('Request error'), null);
+    }
+
+    function onData(chunk) {
+        if (done) return;
+        body += chunk;
+        if (body.length > limit) {
+            finish(new Error('Payload too large'), null);
+        }
+    }
+
+    function onEnd() {
+        if (done) return;
+        var parsed;
+        try {
+            parsed = JSON.parse(body);
+        } catch (e) {
+            return finish(new Error('Invalid JSON'), null);
+        }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            return finish(new Error('Invalid JSON object'), null);
+        }
+        finish(null, parsed);
+    }
+
+    req.on('error', onError);
+    req.on('data', onData);
+    req.on('end', onEnd);
 }
 
 module.exports = function (ctx) {
@@ -116,28 +179,39 @@ module.exports = function (ctx) {
 
     function stopHold() {
         if (activeHoldTimer) {
-            clearInterval(activeHoldTimer);
+            clearTimeout(activeHoldTimer);
             activeHoldTimer = null;
         }
         if (activeHoldKey) {
-            ctx.execute('/usr/bin/input_keyevent ' + activeHoldKey + ' up', 2000).catch(function () {});
+            var k = activeHoldKey;
             activeHoldKey = null;
+            ctx.execute('/usr/bin/input_keyevent ' + k + ' up', 2000).catch(function () {});
         }
     }
 
     function startHold(key) {
         stopHold();
         activeHoldKey = key;
+        var started = Date.now();
         ctx.execute('/usr/bin/input_keyevent ' + key + ' down', 2000).catch(function () {});
 
-        var started = Date.now();
-        activeHoldTimer = setInterval(function () {
-            if (Date.now() - started > 6000 || activeHoldKey !== key) {
+        function step() {
+            if (!activeHoldKey || activeHoldKey !== key || Date.now() - started > 6000) {
                 stopHold();
                 return;
             }
-            ctx.execute('/usr/bin/input_keyevent ' + key, 2000).catch(function () {});
-        }, 75);
+            ctx.execute('/usr/bin/input_keyevent ' + key, 2000)
+                .then(function () {
+                    if (activeHoldKey === key && Date.now() - started <= 6000) {
+                        activeHoldTimer = setTimeout(step, 75);
+                    } else {
+                        stopHold();
+                    }
+                }, function () {
+                    stopHold();
+                });
+        }
+        activeHoldTimer = setTimeout(step, 75);
     }
 
     function getCfg() {
@@ -162,7 +236,7 @@ module.exports = function (ctx) {
 
         status: function () {
             var cfg = getCfg();
-            return { token: cfg.token || null };
+            return { paired: !!(cfg && cfg.token) };
         },
 
         route: function (req, res, sub) {
@@ -179,46 +253,53 @@ module.exports = function (ctx) {
             if (sub === 'status' && req.method === 'GET') {
                 var cfg0 = getCfg();
                 res.writeHead(200, { 'content-type': 'application/json' });
-                res.end(JSON.stringify({ ok: true, token: cfg0.token || null }));
+                res.end(JSON.stringify({
+                    ok: true,
+                    paired: !!(cfg0 && cfg0.token),
+                    tvIp: getTvIp()
+                }));
                 return true;
             }
 
             // POST api/savetoken
             if (sub === 'savetoken' && req.method === 'POST') {
-                var b = '';
-                req.on('data', function (c) { b += c; });
-                req.on('end', function () {
-                    var parsed;
-                    try { parsed = JSON.parse(b); } catch (e) { parsed = {}; }
-                    var c2 = getCfg();
-                    if (parsed.token) {
-                        c2.token = String(parsed.token);
-                    } else if (parsed.reset || parsed.token === null) {
-                        delete c2.token;
+                readJson(req, 4096, function (err, parsed) {
+                    if (err) {
+                        res.writeHead(400, { 'content-type': 'application/json' });
+                        res.end(JSON.stringify({ ok: false, error: err.message }));
+                        return;
                     }
-                    saveCfg(c2);
-                    res.writeHead(200, { 'content-type': 'application/json' });
-                    res.end(JSON.stringify({ ok: true }));
+                    try {
+                        var c2 = getCfg();
+                        if (typeof parsed.token === 'string' && parsed.token.length > 0 && parsed.token.length < 256) {
+                            c2.token = parsed.token;
+                        } else if (parsed.reset || parsed.token === null) {
+                            delete c2.token;
+                        }
+                        saveCfg(c2);
+                        res.writeHead(200, { 'content-type': 'application/json' });
+                        res.end(JSON.stringify({ ok: true }));
+                    } catch (e) {
+                        res.writeHead(500, { 'content-type': 'application/json' });
+                        res.end(JSON.stringify({ ok: false, error: 'failed to save configuration' }));
+                    }
                 });
                 return true;
             }
 
             // POST api/key — inject single keysym or manage hold action
             if (sub === 'key' && req.method === 'POST') {
-                var body = '';
-                req.on('data', function (c) { body += c; });
-                req.on('end', function () {
-                    var parsed, key, action, isShift, isCtrl;
-                    try {
-                        parsed = JSON.parse(body);
-                        key = parsed.key;
-                        action = parsed.action;
-                        isShift = !!parsed.shift;
-                        isCtrl = !!parsed.ctrl;
-                    } catch (e) {
-                        key = null;
-                        action = null;
+                readJson(req, 4096, function (err, parsed) {
+                    if (err) {
+                        res.writeHead(400, { 'content-type': 'application/json' });
+                        res.end(JSON.stringify({ ok: false, error: err.message }));
+                        return;
                     }
+                    var key = parsed.key;
+                    var action = parsed.action;
+                    var isShift = !!parsed.shift;
+                    var isCtrl = !!parsed.ctrl;
+
                     if (!key || typeof key !== 'string' || !/^[A-Za-z0-9_]+$/.test(key)) {
                         res.writeHead(400, { 'content-type': 'application/json' });
                         res.end(JSON.stringify({ ok: false, error: 'invalid key name' }));
@@ -256,32 +337,36 @@ module.exports = function (ctx) {
                         cmd = '/usr/bin/input_keyevent ' + key;
                     }
 
-                    ctx.execute(cmd, 5000)
-                        .then(function (r) {
-                            res.writeHead(200, { 'content-type': 'application/json' });
-                            res.end(JSON.stringify({ ok: r.exit_code === 0, stderr: r.stderr }));
-                        })
-                        .catch(function (e) {
-                            res.writeHead(200, { 'content-type': 'application/json' });
-                            res.end(JSON.stringify({ ok: false, error: e.message }));
-                        });
+                    ctx.execute(cmd, 5000).then(function (r) {
+                        res.writeHead(200, { 'content-type': 'application/json' });
+                        res.end(JSON.stringify({ ok: r.exit_code === 0, stderr: r.stderr }));
+                    }, function (e) {
+                        res.writeHead(200, { 'content-type': 'application/json' });
+                        res.end(JSON.stringify({ ok: false, error: e.message }));
+                    });
                 });
                 return true;
             }
 
             // POST api/type — inject ASCII string via input_keyevent sequence
             if (sub === 'type' && req.method === 'POST') {
-                var btype = '';
-                req.on('data', function (c) { btype += c; });
-                req.on('end', function () {
-                    var parsed, text;
-                    try { parsed = JSON.parse(btype); text = parsed.text; } catch (e) { text = null; }
+                readJson(req, 4096, function (err, parsed) {
+                    if (err) {
+                        res.writeHead(400, { 'content-type': 'application/json' });
+                        res.end(JSON.stringify({ ok: false, error: err.message }));
+                        return;
+                    }
+                    var text = parsed.text;
                     if (!text || typeof text !== 'string') {
                         res.writeHead(400, { 'content-type': 'application/json' });
                         res.end(JSON.stringify({ ok: false, error: 'missing text' }));
                         return;
                     }
+                    if (text.length > 200) {
+                        text = text.slice(0, 200);
+                    }
                     var cmds = [];
+                    var dropped = [];
                     for (var i = 0; i < text.length; i++) {
                         var ch = text[i];
                         if (/^[a-z0-9]$/.test(ch)) {
@@ -292,37 +377,40 @@ module.exports = function (ctx) {
                             cmds.push('/usr/bin/input_keyevent Shift_L down; /usr/bin/input_keyevent ' + SHIFT_MAP[ch] + '; /usr/bin/input_keyevent Shift_L up');
                         } else if (LATIN_MAP[ch]) {
                             cmds.push('/usr/bin/input_keyevent ' + LATIN_MAP[ch]);
+                        } else {
+                            dropped.push(ch);
                         }
                     }
                     if (cmds.length === 0) {
                         res.writeHead(200, { 'content-type': 'application/json' });
-                        res.end(JSON.stringify({ ok: true }));
+                        res.end(JSON.stringify({
+                            ok: true,
+                            dropped: dropped.length > 0 ? dropped : undefined
+                        }));
                         return;
                     }
                     var cmd = "sh -c '" + cmds.join('; sleep 0.04; ') + "'";
-                    ctx.execute(cmd, 15000)
-                        .then(function (r) {
-                            res.writeHead(200, { 'content-type': 'application/json' });
-                            res.end(JSON.stringify({ ok: r.exit_code === 0, stderr: r.stderr }));
-                        })
-                        .catch(function (e) {
-                            res.writeHead(200, { 'content-type': 'application/json' });
-                            res.end(JSON.stringify({ ok: false, error: e.message }));
-                        });
+                    ctx.execute(cmd, 15000).then(function (r) {
+                        res.writeHead(200, { 'content-type': 'application/json' });
+                        res.end(JSON.stringify({
+                            ok: r.exit_code === 0,
+                            dropped: dropped.length > 0 ? dropped : undefined,
+                            stderr: r.stderr
+                        }));
+                    }, function (e) {
+                        res.writeHead(200, { 'content-type': 'application/json' });
+                        res.end(JSON.stringify({ ok: false, error: e.message }));
+                    });
                 });
                 return true;
             }
 
             // POST api/mouse — fallback cursor jump/click/drag and scroll wheel via enlightenment_info
             if (sub === 'mouse' && req.method === 'POST') {
-                var bmouse = '';
-                req.on('data', function (c) { bmouse += c; });
-                req.on('end', function () {
-                    var parsed;
-                    try { parsed = JSON.parse(bmouse); } catch (e) { parsed = null; }
-                    if (!parsed || typeof parsed !== 'object') {
+                readJson(req, 4096, function (err, parsed) {
+                    if (err) {
                         res.writeHead(400, { 'content-type': 'application/json' });
-                        res.end(JSON.stringify({ ok: false, error: 'invalid payload' }));
+                        res.end(JSON.stringify({ ok: false, error: err.message }));
                         return;
                     }
                     var action = String(parsed.action || 'click');
@@ -378,48 +466,53 @@ module.exports = function (ctx) {
 
                     cmds.push('/usr/bin/enlightenment_info -deinit_device');
                     var shCmd = "sh -c '" + cmds.join(' >/dev/null 2>&1; ') + " >/dev/null 2>&1'";
-                    ctx.execute(shCmd, 5000)
-                        .then(function (r) {
-                            res.writeHead(200, { 'content-type': 'application/json' });
-                            res.end(JSON.stringify({ ok: r.exit_code === 0, stderr: r.stderr }));
-                        })
-                        .catch(function (e) {
-                            res.writeHead(200, { 'content-type': 'application/json' });
-                            res.end(JSON.stringify({ ok: false, error: e.message }));
-                        });
+                    ctx.execute(shCmd, 5000).then(function (r) {
+                        res.writeHead(200, { 'content-type': 'application/json' });
+                        res.end(JSON.stringify({ ok: r.exit_code === 0, stderr: r.stderr }));
+                    }, function (e) {
+                        res.writeHead(200, { 'content-type': 'application/json' });
+                        res.end(JSON.stringify({ ok: false, error: e.message }));
+                    });
                 });
                 return true;
             }
 
             // GET api/screenshot — captures 1080p frame buffer from Enlightenment WM
             if (sub === 'screenshot' && req.method === 'GET') {
-                var shotPath = '/tmp/screenshot.png';
+                var shotId = Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+                var shotPath = '/tmp/shot_' + shotId + '.png';
                 var shotCmd = "dbus-send --system --print-reply --dest=org.enlightenment.wm /org/enlightenment/wm org.enlightenment.wm.info.dump_screen string:'" + shotPath + "'";
-                ctx.execute(shotCmd, 10000)
-                    .then(function (r) {
-                        if (r.exit_code !== 0) {
+
+                function unlinkFile() {
+                    fs.unlink(shotPath, function () {});
+                }
+
+                ctx.execute(shotCmd, 10000).then(function (r) {
+                    if (r.exit_code !== 0) {
+                        unlinkFile();
+                        res.writeHead(500, { 'content-type': 'application/json' });
+                        res.end(JSON.stringify({ ok: false, error: r.stderr || 'Screenshot capture failed' }));
+                        return;
+                    }
+                    fs.readFile(shotPath, function (err, data) {
+                        unlinkFile();
+                        if (err) {
                             res.writeHead(500, { 'content-type': 'application/json' });
-                            res.end(JSON.stringify({ ok: false, error: r.stderr || 'Screenshot capture failed' }));
+                            res.end(JSON.stringify({ ok: false, error: err.message }));
                             return;
                         }
-                        fs.readFile(shotPath, function (err, data) {
-                            if (err) {
-                                res.writeHead(500, { 'content-type': 'application/json' });
-                                res.end(JSON.stringify({ ok: false, error: err.message }));
-                                return;
-                            }
-                            res.writeHead(200, {
-                                'content-type': 'image/png',
-                                'cache-control': 'no-store, must-revalidate',
-                                'content-length': data.length
-                            });
-                            res.end(data);
+                        res.writeHead(200, {
+                            'content-type': 'image/png',
+                            'cache-control': 'no-store, must-revalidate',
+                            'content-length': data.length
                         });
-                    })
-                    .catch(function (e) {
-                        res.writeHead(500, { 'content-type': 'application/json' });
-                        res.end(JSON.stringify({ ok: false, error: e.message }));
+                        res.end(data);
                     });
+                }, function (e) {
+                    unlinkFile();
+                    res.writeHead(500, { 'content-type': 'application/json' });
+                    res.end(JSON.stringify({ ok: false, error: e.message }));
+                });
                 return true;
             }
 

@@ -1102,12 +1102,17 @@ body.is-screen-only #only-theater-actions {
 <script>
 var tvIp = location.hostname || "127.0.0.1";
 var tvToken = null;
+try {
+  tvToken = localStorage.getItem("tv_token") || null;
+} catch (eTok) {}
 var ws = null;
 var wsConnected = false;
 var wsConnecting = false;
 var wsMouseReady = false;
-var activePort = null;
+var activePort = 8002;
 var activeHoldKey = null;
+var authRetryCount = 0;
+var MAX_AUTH_RETRIES = 3;
 
 var isTouch = ("ontouchstart" in window) || (navigator.maxTouchPoints > 0);
 var isMobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
@@ -1132,8 +1137,13 @@ document.addEventListener("pointerdown", function (e) {
 }, true);
 
 var fullCertUrl = "https://" + tvIp + ":8002/api/v2/";
-if (certUrlInput) certUrlInput.value = fullCertUrl;
-if (certLink) certLink.href = fullCertUrl;
+
+function updateCertUrl() {
+  fullCertUrl = "https://" + tvIp + ":8002/api/v2/";
+  if (certUrlInput) certUrlInput.value = fullCertUrl;
+  if (certLink) certLink.href = fullCertUrl;
+}
+updateCertUrl();
 
 if (btnCopyCert) {
   btnCopyCert.onclick = function () {
@@ -1158,6 +1168,7 @@ if (btnCopyCert) {
 
 if (btnReconnect) {
   btnReconnect.onclick = function () {
+    authRetryCount = 0;
     setStatus("Connecting…", "busy");
     if (ws) { try { ws.close(); } catch (e) {} }
     wsConnected = false;
@@ -1168,7 +1179,9 @@ if (btnReconnect) {
 
 if (btnRepair) {
   btnRepair.onclick = function () {
+    authRetryCount = 0;
     tvToken = null;
+    try { localStorage.removeItem("tv_token"); } catch (eTok) {}
     fetch("savetoken", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1178,6 +1191,8 @@ if (btnRepair) {
       if (ws) { try { ws.close(); } catch (e) {} }
       wsConnected = false;
       wsConnecting = false;
+      initWS();
+    }).catch(function () {
       initWS();
     });
   };
@@ -1311,14 +1326,13 @@ function sendKey(key, shift, ctrl) {
     .catch(function () { setStatus("Network error", "err"); });
 }
 
-function initWS(forcePort) {
+function initWS() {
   if (wsConnected) return;
-  if (wsConnecting && !forcePort) return;
+  if (wsConnecting) return;
   wsConnecting = true;
 
-  var port = forcePort || activePort || 8002;
-  var isSecure = (port === 8002);
-  var proto = isSecure ? "wss://" : "ws://";
+  var port = 8002;
+  var proto = "wss://";
   var appB64 = btoa("TVKeyboard");
   var url = proto + tvIp + ":" + port + "/api/v2/channels/samsung.remote.control?name=" + appB64 +
             (tvToken ? "&token=" + encodeURIComponent(tvToken) : "");
@@ -1330,9 +1344,8 @@ function initWS(forcePort) {
   } catch (e) {
     wsConnecting = false;
     wsConnected = false;
-    if (port === 8002) {
-      setTimeout(function () { initWS(8001); }, 100);
-    }
+    certBanner.style.display = "block";
+    setStatus("TV certificate approval required (see banner above)", "warn");
     return;
   }
 
@@ -1341,13 +1354,10 @@ function initWS(forcePort) {
     if (!opened && wsConnecting && ws === currentWs) {
       try { currentWs.close(); } catch (e) {}
       wsConnecting = false;
-      if (port === 8002) {
-        initWS(8001);
-      } else {
-        certBanner.style.display = "block";
-      }
+      certBanner.style.display = "block";
+      setStatus("TV certificate approval required (see banner above)", "warn");
     }
-  }, 3000);
+  }, 3500);
 
   currentWs.onopen = function () {
     opened = true;
@@ -1361,7 +1371,8 @@ function initWS(forcePort) {
         wsConnected = true;
         wsConnecting = false;
         wsMouseReady = false;
-        activePort = port;
+        activePort = 8002;
+        authRetryCount = 0;
         try {
           currentWs.send(JSON.stringify({
             method: "ms.remote.control",
@@ -1372,6 +1383,7 @@ function initWS(forcePort) {
         var t = msg.data && msg.data.token ? String(msg.data.token) : null;
         if (t && t !== tvToken) {
           tvToken = t;
+          try { localStorage.setItem("tv_token", t); } catch (eTok) {}
           fetch("savetoken", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1385,13 +1397,19 @@ function initWS(forcePort) {
         wsConnecting = false;
         wsMouseReady = false;
         tvToken = null;
+        try { localStorage.removeItem("tv_token"); } catch (eTok) {}
         fetch("savetoken", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ reset: true })
         }).catch(function () {});
-        setStatus("Pairing required — please select 'Allow' on your TV screen", "warn");
-        setTimeout(function () { initWS(port); }, 1500);
+        authRetryCount++;
+        if (authRetryCount <= MAX_AUTH_RETRIES) {
+          setStatus("Pairing required (" + authRetryCount + "/" + MAX_AUTH_RETRIES + ") — please select 'Allow' on your TV screen", "warn");
+          setTimeout(function () { initWS(); }, 1500);
+        } else {
+          setStatus("Pairing was not accepted on TV. Click Reconnect to try again.", "err");
+        }
       }
     } catch (err) {}
   };
@@ -1401,10 +1419,9 @@ function initWS(forcePort) {
     wsConnected = false;
     wsConnecting = false;
     wsMouseReady = false;
-    if (!opened && port === 8002) {
-      initWS(8001);
-    } else if (!opened) {
+    if (!opened) {
       certBanner.style.display = "block";
+      setStatus("TV certificate approval required (see banner above)", "warn");
     }
   };
 
@@ -1417,7 +1434,10 @@ function initWS(forcePort) {
 }
 
 fetch("status").then(function (r) { return r.json(); }).then(function (d) {
-  if (d.token) tvToken = d.token;
+  if (d.tvIp) {
+    tvIp = d.tvIp;
+    updateCertUrl();
+  }
   initWS();
 }).catch(function () {
   initWS();
@@ -1458,7 +1478,15 @@ function sendText(text) {
       body: JSON.stringify({ text: text })
     }).then(function (r) { return r.json(); })
       .then(function (d) {
-        setStatus(d.ok ? "Text sent ✔" : "Failed: " + (d.error || ""), d.ok ? "ok" : "err");
+        if (d.ok) {
+          if (d.dropped && d.dropped.length > 0) {
+            setStatus("Text sent (unsupported chars omitted: " + d.dropped.join(" ") + ")", "warn");
+          } else {
+            setStatus("Text sent ✔", "ok");
+          }
+        } else {
+          setStatus("Failed: " + (d.error || ""), "err");
+        }
       })
       .catch(function () { setStatus("Network error", "err"); });
   } else {
