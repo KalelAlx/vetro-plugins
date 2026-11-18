@@ -9,7 +9,7 @@ this Shard goes the other way and lets the TV's remote control things in your ho
 
 ## What it needs
 
-- **Vetro 0.5.1 or later** for the card. On 0.5.0 and 0.4.0 the Shard loads and its page works, but there is no card.
+- **Vetro 0.7.0 or later** for the card. On older versions the Shard loads and its page works, but there is no card.
 - The Control center on: **Vetro UI → Launcher → Control center**, switch **Home Assistant** on (it is off until you do; at most three cards in all).
 - A Home Assistant the TV can reach, and a **long-lived access token**: in Home Assistant, your profile → Security → Long-lived access tokens.
   Use the server's IP address (`http://192.168.1.20:8123`): a name ending in `.local` often does not resolve on the TV.
@@ -59,6 +59,6 @@ use a token made for this, and delete it in Home Assistant if you remove the Sha
 ## Tested
 
 Against a fake Home Assistant: `tests/home-assistant.test.cjs` (slow answers, `401`, broken JSON, more than seven entities, odd ids, an unknown row, the setup
-routes) and, by hand, `tests/manual/home-assistant-in-vetro-host.cjs <vetro repo>`, which installs the bundle in Vetro's own plugin host (`plugin-host.js`, `release-0.5.1`) and
+routes) and, by hand, `tests/manual/home-assistant-in-vetro-host.cjs <vetro repo>`, which installs the bundle in Vetro's own plugin host (`plugin-host.js`, commit `f1b48f6`) and
 checks what the card shows after the host's limits, timeouts and cleaning. The network code also ran on Node 4.4.7, 12 and 22. The author also tried the card on a real TV
 with a real Home Assistant, through the whole chain (the launcher, the Vetro service, this Shard).

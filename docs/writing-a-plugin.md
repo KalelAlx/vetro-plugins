@@ -62,7 +62,7 @@ a Shard run, then change it.
 | `permissions` | no | `[]` or `["exec"]`. Ask for `exec` only if you call `ctx.execute`. |
 | `main` | no | The entry file. Default `index.js`. |
 | `ui` | no | `{ "label": "…" }`, 1-24 characters. Adds a tab to the dashboard while the Shard runs. The Shard must answer the `ui` route. |
-| `controlCenter` | no | `{ "label": "…" }`, 1-24 plain characters. Adds one card to the Control center of the Vetro launcher while the Shard runs, from your `card()` and `cardSelect(rowId)`. Both methods are required with it. Needs Vetro 0.5.1; older versions ignore the key. See [Adding a card to the Control center](#adding-a-card-to-the-control-center). |
+| `controlCenter` | no | `{ "label": "…" }`, 1-24 plain characters. Adds one card to the Control center of the Vetro launcher while the Shard runs, from your `card()` and `cardSelect(rowId)`. Both methods are required with it. Needs Vetro 0.7.0; older versions ignore the key. See [Adding a card to the Control center](#adding-a-card-to-the-control-center). |
 | `intercepts` | no | `[{ "appId": "…", "label": "…" }]`, 1-3 apps. Says that the Vetro launcher's tile for each app starts your `launch(appId)` while the Shard runs. The Shard must have a `launch` method. See [Taking over an app's tile](#taking-over-an-apps-launcher-tile). |
 
 **Choosing `permissions`.** There is only one, `exec`: shell commands on the TV, as root. Leave it out unless you need

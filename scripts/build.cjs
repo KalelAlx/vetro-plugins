@@ -42,7 +42,7 @@ function intercepts(list) {
     return e;
 }
 
-// The manifest key "controlCenter": one card in the launcher's Control center (Vetro 0.5.1). The same rules as the TV (plugin-host.js: checkControlCenter).
+// The manifest key "controlCenter": one card in the launcher's Control center (Vetro 0.7.0). The same rules as the TV (plugin-host.js: checkControlCenter).
 function controlCenter(cc) {
     if (cc == null) return [];
     if (typeof cc !== 'object' || Array.isArray(cc)) return ['controlCenter must be an object with a label'];

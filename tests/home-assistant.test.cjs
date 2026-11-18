@@ -1,5 +1,5 @@
 'use strict';
-// The Home Assistant Shard against a fake Home Assistant: the card contract of Vetro 0.5.1 (limits, timeouts, no ticks), the safety of what
+// The Home Assistant Shard against a fake Home Assistant: the card contract of Vetro 0.7.0 (limits, timeouts, no ticks), the safety of what
 // OK may do, the errors, and the setup routes. It does not need the Vetro repository: the limits below are the host's, written out.
 const { test } = require('node:test'), assert = require('node:assert/strict'), http = require('http'), { EventEmitter } = require('events');
 const build = require('../scripts/build.cjs'), ha = require('../plugins/home-assistant/ha.js');

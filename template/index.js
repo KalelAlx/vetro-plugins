@@ -39,7 +39,7 @@ module.exports = function (ctx) {
         // this instead of starting the app. Return a Promise: true = started, false = decline (Vetro starts the app).
         // launch: function (appId) { return ctx.execute('app_launcher -s ' + appId, 10000).then(function () { return true; }); },
 
-        // Only with "controlCenter": { "label": "…" } in the manifest (Vetro 0.5.1): one card in the launcher's Control center.
+        // Only with "controlCenter": { "label": "…" } in the manifest (Vetro 0.7.0): one card in the launcher's Control center.
         // Both methods are then required. Up to 7 rows; see docs/writing-a-plugin.md and plugins/home-assistant.
         // card: function () { return { rows: [{ id: 'press', label: 'Press', value: String(count) }] }; },   // read-only, 3 s
         // cardSelect: function (rowId) { count++; return { ok: true, rows: [{ id: 'press', label: 'Press', value: String(count) }] }; },   // OK on a row, 10 s

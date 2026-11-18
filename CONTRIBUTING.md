@@ -19,7 +19,7 @@ Run `npm ci --ignore-scripts`, `npm test`, `npm run check` and
 Node 4.4.7, 12.4.0 and 20; use only ES5 in Shard files. `start()`/`stop()` must release
 timers and sockets across restarts. Fake TV command responses in smoke tests are
 not proof of working on real hardware: include your model and actual test results. For a card, say what you saw on the
-Control center itself (Vetro 0.5.1 or later), or say that you did not try it on a TV.
+Control center itself (Vetro 0.7.0 or later), or say that you did not try it on a TV.
 
 The required `check` must pass and a code owner must approve an ordinary merge.
 Administrators retain their existing explicit bypass; the publishing key must

@@ -1,6 +1,6 @@
 'use strict';
 // By hand, not in CI (CI has no Vetro repository): runs the packed Home Assistant Shard inside Vetro's real plugin-host.js
-// (release-0.5.1 or later) against a fake Home Assistant, to see the host's own limits, timeouts and cleaning applied to it.
+// (0.7.0 or later) against a fake Home Assistant, to see the host's own limits, timeouts and cleaning applied to it.
 //   node scripts/build.cjs && node tests/manual/home-assistant-in-vetro-host.cjs /path/to/vetro
 // Takes about 25 seconds (it waits out the two timeouts).
 const assert = require('assert').strict, fs = require('fs'), os = require('os'), path = require('path'), http = require('http');

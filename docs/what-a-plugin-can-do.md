@@ -1,7 +1,7 @@
 # What a Vetro Shard can and cannot do
 
-Written against Vetro **0.4.0**, **0.5.0** and **0.5.1**, plugin API **1** (experimental). It did not change between 0.4.0 and 0.5.0. Vetro 0.5.1 adds
-two optional manifest keys, `intercepts` (a `launch` method) and `controlCenter` (`card` and `cardSelect` methods); older versions ignore them.
+Written against Vetro **0.4.0**, **0.5.0** and **0.7.0**, plugin API **1** (experimental). It did not change between 0.4.0 and 0.5.0. Vetro 0.7.0 adds
+an optional manifest key, `controlCenter` (`card` and `cardSelect` methods); older versions ignore it.
 Since 0.5.0 the dashboard calls the plugin system **Vetro Shards** and one plugin a **Shard**; 0.4.0 calls the same page
 *Plugins*. Only that name changed: the code, the `permissions` field, the `.vplugin` bundles and the routes still say
 "plugin". Everything here comes from the host's code
@@ -56,7 +56,7 @@ Checked by the host. A Shard cannot opt out of any of these.
 | **Unsigned installs need Developer mode** | A Shard the catalog has not signed, including one installed from a file, installs only with **Developer mode** on. It is off by default and asks for confirmation. In 0.5.0 this holds for every build; in 0.4.0 only for builds that have the catalog's key. |
 | **Built-in Shards are protected** | A Shard that ships inside Vetro (since 0.5.0: `launcher`) cannot be replaced by a bundle or removed, and keeps running in safe mode. Only built-in Shards receive `ctx.vetro`, Vetro's own services; a catalog Shard never does. |
 | **Taking over a launcher tile** | A manifest `intercepts` list makes the Vetro launcher call the Shard's `launch(appId)` for those apps' tiles while the Shard is on. It is not a permission, the dashboard shows **Intercepts the &lt;app&gt; app** on the Shard's card and in the install question, and Vetro starts the app itself if the Shard is off, declines, fails or takes more than 2 minutes. The launcher never reads anything from the Shard: it only learns which tiles are taken over. Two Shards claiming the same app: neither takes it, and the dashboard shows the conflict. |
-| **A card in the Control center** | A manifest `controlCenter` (`{ "label": "…" }`) makes the Vetro launcher's Control center show one card from the Shard's `card()` and `cardSelect(rowId)` while the Shard is on (Vetro 0.5.1; older versions ignore the key). It is not a permission. Vetro cleans everything the Shard returns (at most 7 rows, `label` 40, `value` 24, `note` 80 characters, no control characters), reads time out at 3 s and presses at 10 s, and errors are the card's own ("Not available"), never counted towards the 3 that switch a Shard off. The launcher never runs Shard code: it asks the Vetro service on the TV, which asks the Shard. The user has to turn the card on in Vetro UI → Launcher → Control center. |
+| **A card in the Control center** | A manifest `controlCenter` (`{ "label": "…" }`) makes the Vetro launcher's Control center show one card from the Shard's `card()` and `cardSelect(rowId)` while the Shard is on (Vetro 0.7.0; older versions ignore the key). It is not a permission. Vetro cleans everything the Shard returns (at most 7 rows, `label` 40, `value` 24, `note` 80 characters, no control characters), reads time out at 3 s and presses at 10 s, and errors are the card's own ("Not available"), never counted towards the 3 that switch a Shard off. The launcher never runs Shard code: it asks the Vetro service on the TV, which asks the Shard. The user has to turn the card on in Vetro UI → Launcher → Control center. |
 | **Own saved data** | `ctx.config` reads and writes one file, `config.json`, in the Shard's own folder. Nothing else survives an update; Remove deletes it. |
 | **`ctx.execute` needs `exec`** | Without the permission, `ctx.execute` rejects. This is the only thing the permission gates (see section 4). |
 | **Pages are sandboxed** | Everything under `/api/` is served with `Content-Security-Policy: sandbox allow-scripts`. The page runs in a frame with scripts but without cookies, storage or the dashboard's origin. It gets a **session token in its URL** that opens that Shard's routes only, expires after 8 hours and ends when the Shard is switched off. |
@@ -120,7 +120,7 @@ module.exports = function (ctx) {
 | `stop()` | It is switched off, or `start()` threw. Close everything you opened. |
 | `status()` | The dashboard asks for the Shard's detail. Returns an object. Called often: keep it cheap. |
 | `route(req, res, sub)` | A request to `/plugins/<id>/api/<sub>`. Return `true` when you answered, `false` when it is not yours. |
-| `card()` | Only with `controlCenter` (Vetro 0.5.1). The Control center opens: return `{ rows: [{ id, label, value?, ticked? }], note?, choosable? }`, or a Promise of it. Vetro gives it 3 seconds. |
+| `card()` | Only with `controlCenter` (Vetro 0.7.0). The Control center opens: return `{ rows: [{ id, label, value?, ticked? }], note?, choosable? }`, or a Promise of it. Vetro gives it 3 seconds. |
 | `cardSelect(rowId)` | Only with `controlCenter`. OK on a row: do it, return `{ ok, note?, rows? }`, or a Promise. 10 seconds. OK on a ticked row is ignored by the Control center. |
 
 **A page.** With `"ui": { "label": "…" }` in the manifest, `GET api/ui` must return HTML. The dashboard shows it as a
