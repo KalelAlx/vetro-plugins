@@ -42,6 +42,20 @@
       "size": 65608
     },
     {
+      "id": "home-assistant",
+      "name": "Home Assistant",
+      "version": "0.1.0",
+      "author": "andrearicci93",
+      "description": "A Home Assistant card in Vetro's Control center for lights, switches, scenes and scripts. Talks only to the Home Assistant address you set (REST API).",
+      "permissions": [],
+      "url": "dist/home-assistant-0.1.0.vplugin",
+      "sha256": "b6cc8eae731a3d2df052ec6c567986f98736e547962125de3a088111fb6fc3d0",
+      "size": 38242,
+      "controlCenter": {
+        "label": "Home Assistant"
+      }
+    },
+    {
       "id": "nordvpn",
       "name": "NordVPN",
       "version": "1.0.0",
