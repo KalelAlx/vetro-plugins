@@ -114,8 +114,8 @@
         "exec"
       ],
       "url": "dist/youtube-0.4.1.vplugin",
-      "sha256": "5920ea1a7b75f37fd1b7204550aac4eab7d5111fad889d35961e2c701aa71792",
-      "size": 84745,
+      "sha256": "ccbf4fb3bfb4f025682b197db734d6f7a8965ec4bb71d7a743ed1564f1018389",
+      "size": 92998,
       "intercepts": [
         {
           "appId": "com.samsung.tv.cobalt-yt",

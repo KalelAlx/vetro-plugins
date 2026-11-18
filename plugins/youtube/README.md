@@ -83,9 +83,20 @@ installing can take up to a minute while the certificate and the content folder 
 ## After a boot
 
 Samsung removes the wrapper app behind the YouTube key from the TV's app list at every boot, so the tile row cannot be patched
-until Samsung brings it back. While **Samsung's YouTube button opens this** is on, the plugin therefore checks every 6 seconds
-whether YouTube was started without its proxy flags and, if so, closes it and starts it again through the proxy (at most 3 times
-in 2 minutes). At boot it also retries the first jobs every 3 seconds until Vetro's root agent has connected. Nothing is installed.
+until Samsung brings it back. While **Samsung's YouTube button opens this** is on, the plugin therefore watches whether YouTube was
+started without its proxy flags and, if so, closes it and starts it again through the proxy (at most 3 times in 2 minutes).
+At boot it also retries the first jobs every 3 seconds until Vetro's root agent has connected. Nothing is installed.
+
+The watch costs almost no root commands while nothing happens:
+
+- Every 3 seconds it lists the TV's processes from inside Vetro, without root. A new process it can read is looked at directly:
+  the YouTube app's command line says whether it carries the plugin's flags.
+- A new process it cannot read (on Tizen an app usually cannot read another app's processes) that is still there 3 seconds later
+  leads to one root check (`pgrep` on the YouTube app's command line), at most one every 6 seconds. Each process is tried once.
+- One root check a minute runs anyway, in case YouTube started in a way the list did not show. None runs while the patched app is
+  open, one right after it closes. A check that fails (at boot, before Vetro's root agent is there) is tried again after 6 seconds.
+- If the process list cannot be read at all, it falls back to a root check every 6 seconds.
+- `/api/status` → `watch` shows which way it runs (`processes` or `root`), how many root checks it made, and what found the app.
 
 ## The Home tile (optional, off by default)
 
@@ -108,13 +119,15 @@ takes it out again. The rules:
   If our flags are in a value this plugin will not edit, *Remove certificate and files* refuses and deletes nothing.
 - If Vetro dies without restoring the row, YouTube still opens (the proxy list ends in `direct://`), unpatched.
 
-## Commands it runs, all as root and only when you press a button
+## Commands it runs, all as root
 
 - Open: `openssl` (make or renew the authority and the youtube.com certificate), `cp -R` of the YouTube app's content folder
   (about 3 MB), `app_launcher -t` and `app_launcher -s` for `com.samsung.tv.cobalt-yt`.
 - Close: `app_launcher -t com.samsung.tv.cobalt-yt`.
 - The Home tile switch: `sqlite3` on that database (read the one row, compare-and-swap update), then `chown` of the database back to its owner.
 - Remove certificate and files: puts the row back, closes YouTube and runs `rm -rf <DIR>`.
+- With **Samsung's YouTube button opens this** on, also without a button: the watch's `pgrep` check (see *After a boot*) and,
+  once a minute, a read of the row.
 
 Switching the plugin off stops the proxy but does not close a YouTube that is already open: connections already made keep
 working and new ones fall back to a direct connection.
