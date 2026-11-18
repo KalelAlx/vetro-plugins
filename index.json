@@ -99,6 +99,20 @@
       "signature": "pKkMa0sRbICbYTuZserJUo6AQI0wKHPaYDs0FZ/miwg571LohA1XfJaXYw5KWpZmMBCk9/9aps/fatolUL6UnlXGJFAz0REAVNPS5YbvU9ycVuK3MhHbzM2AihDru0Qxy+EtlGcd7Dh7bIQntCRkzIAdpO/jBX3IQ+Rk+37TMO6D1F3o4fufUsv/O1AK0nxeXrEoz7gx9ZiyNug/RJQlIEHdDD+ICfLdHeWs+Oj0DtdpSC6WMhNA/sQPqJCuegfcPAxmWzktyaUnzz4i4x1D+xU8VYvpqP1S0I69zKj1jq7FoCo9EPILXdh8JuWCjUORtLiWkEtsN+z3BWXl7OHG2eAZWg7/C6MsEQ4wfutO2jNOoHEy8KGHnAkIi+qhke//Yizt8u1BsqKnQD1T2Bd8DpYvHE0TtEMTRped2BcMGiB4al4U8N/LHedSrdRv1uFXpNmz/i5t7Qq6q5VctsxpwmAPGkTI0HT24DMfgh31Ns3/+iqwLYClbp1SGpLQeQUB"
     },
     {
+      "id": "tv-reboot",
+      "name": "TV reboot",
+      "version": "1.0.0",
+      "author": "genesai",
+      "description": "A button that restarts the TV. Runs systemctl reboot through the TV agent (needs the exec permission).",
+      "permissions": [
+        "exec"
+      ],
+      "url": "dist/tv-reboot-1.0.0.vplugin",
+      "sha256": "4677a4ef86416289465ae7eb80fd37478c12b130423c26ed2e530dbccc2853d9",
+      "size": 9105,
+      "signature": "Jj1kM9DvuWhsnLSj2TvG5NgkaWpa0YleFKyKzdBKhL3iS1O0jneng9LcHcoulEJf+yFl042nbwUDnH2l9/OG8p3cxWj3o6VDexvH2g1N1BSvnRcBLtKemGbNKPhOcxWJDJhGnvnviuLTJpRl1uOP7MxJhtQQiBseg2Gal4s4Jz9+4FpZv+8/Licgx5PW+tmsbvWVIxA+speKdVXNJ1K4QhiFiRFUplTFJjv2TozTB0chk5oswREsuX+qc1N4gQIK4vONYUwocs339zrLurJAX9SaUV6mC+GOoiNS4wOXWqEbDyGRvzGIWDiV1OIM6ZbdBhOxsRD6BUevniuzFFWV6u+MH3DwFPkzlROvvXeU0HC61gacT+u6XA1tr4H3tWi+tw7iuP6AgtxEZy1JPwgTkV1et6pKq5GEKExnEhjOU+H8wSswI5JTkbjLNfc75KsQ/0JRUNFMp91YLMkgmnk1gFfK3DcCefc4RSJ5fL1kyIl7l5PHFajvKObqBusNANM/"
+    },
+    {
       "id": "tv-uptime",
       "name": "TV uptime",
       "version": "1.0.1",
