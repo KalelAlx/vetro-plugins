@@ -111,6 +111,7 @@ body {
   align-items: center;
   gap: var(--s2);
   flex-shrink: 0;
+  max-width: 65%;
 }
 
 .status-badge {
@@ -125,6 +126,10 @@ body {
   gap: 6px;
   white-space: nowrap;
   color: var(--muted);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-sizing: border-box;
 }
 .status-badge.ok {
   background: rgba(127, 203, 160, .14);
@@ -648,6 +653,41 @@ button.danger:hover { background: rgba(248, 81, 73, .22); }
   background: rgba(88, 166, 255, .18);
   color: #79c0ff;
 }
+.btn-mobile-text {
+  display: none;
+}
+@media (max-width: 520px) {
+  #btn-enter-theater .btn-label,
+  #link-standalone .btn-label {
+    display: none;
+  }
+  #btn-enter-theater,
+  #link-standalone {
+    padding: 0 7px;
+    font-size: var(--fs-s);
+  }
+  .box-title-row h2 {
+    font-size: var(--fs-m);
+  }
+  .box-header-actions {
+    max-width: 62%;
+    gap: 6px;
+  }
+  .status-badge {
+    max-width: 155px;
+    font-size: var(--fs-xs);
+    padding: 2px 8px;
+  }
+  .btn-desktop-text {
+    display: none;
+  }
+  .btn-mobile-text {
+    display: inline;
+  }
+  .input-btns button {
+    padding: var(--s2) 8px;
+  }
+}
 .screen-hint {
   margin: 6px 0 0;
   font-size: var(--fs-xs);
@@ -848,8 +888,8 @@ body.is-screen-only #only-theater-actions {
       <div class="box-title-row box-title-clickable" id="screen-header">
         <h2>Screen preview</h2>
         <div class="box-header-actions">
-          <a id="link-standalone" href="#screen" target="_blank" rel="noopener" class="link-pill" title="Open full Screen Preview in a new tab (or right-click / long-press → Open in new tab)">↗ New Tab</a>
-          <button type="button" id="btn-enter-theater" class="btn-mini" title="Expand Screen Preview to full viewport">⛶ Fullscreen</button>
+          <a id="link-standalone" href="#screen" target="_blank" rel="noopener" class="link-pill" title="Open full Screen Preview in a new tab (or right-click / long-press → Open in new tab)"><span class="btn-icon">↗</span><span class="btn-label"> New Tab</span></a>
+          <button type="button" id="btn-enter-theater" class="btn-mini" title="Expand Screen Preview to full viewport"><span class="btn-icon">⛶</span><span class="btn-label"> Fullscreen</span></button>
           <button type="button" class="btn-collapse" id="btn-toggle-screen" title="Toggle Screen Preview" aria-label="Toggle Screen Preview" aria-expanded="false">
             <svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"></polyline></svg>
           </button>
@@ -967,7 +1007,7 @@ body.is-screen-only #only-theater-actions {
             <div class="input-btns">
               <button type="button" class="primary" id="btn-send">Send ↵</button>
               <button type="button" class="danger" id="btn-bksp">⌫ Del</button>
-              <button type="button" class="btn" id="btn-select-all" title="Select all text in focused TV input (Ctrl+A)">Select All</button>
+              <button type="button" class="btn" id="btn-select-all" title="Select all text in focused TV input (Ctrl+A)"><span class="btn-desktop-text">Select All</span><span class="btn-mobile-text">Sel All</span></button>
             </div>
           </div>
           <p class="notice" style="margin-bottom:0">
@@ -1215,6 +1255,7 @@ if (certLink) {
 function setStatus(msg, cls) {
   statusEl.textContent = msg;
   statusEl.className = "status-badge" + (cls ? " " + cls : "");
+  statusEl.title = msg;
 }
 
 function utf8b64(str) {
@@ -1350,7 +1391,7 @@ function initWS() {
     wsConnecting = false;
     wsConnected = false;
     certBanner.style.display = "block";
-    setStatus("TV certificate approval required (see banner above)", "warn");
+    setStatus("Cert required", "warn");
     return;
   }
 
@@ -1360,7 +1401,7 @@ function initWS() {
       try { currentWs.close(); } catch (e) {}
       wsConnecting = false;
       certBanner.style.display = "block";
-      setStatus("TV certificate approval required (see banner above)", "warn");
+      setStatus("Cert required", "warn");
     }
   }, 3500);
 
@@ -1368,9 +1409,9 @@ function initWS() {
     opened = true;
     clearTimeout(connTimer);
     if (!tvToken) {
-      setStatus("Pairing prompt sent to TV — please select 'Allow' on your TV screen", "warn");
+      setStatus("Select 'Allow' on TV", "warn");
     } else {
-      setStatus("Authenticating with TV…", "busy");
+      setStatus("Authenticating…", "busy");
     }
   };
 
@@ -1415,10 +1456,10 @@ function initWS() {
         }).catch(function () {});
         authRetryCount++;
         if (authRetryCount <= MAX_AUTH_RETRIES) {
-          setStatus("Pairing denied on TV (" + authRetryCount + "/" + MAX_AUTH_RETRIES + "). Retrying…", "warn");
+          setStatus("Pairing denied (" + authRetryCount + "/" + MAX_AUTH_RETRIES + ")", "warn");
           setTimeout(function () { initWS(); }, 2000);
         } else {
-          setStatus("Pairing was not accepted on TV. Click Reconnect to try again.", "err");
+          setStatus("Pairing denied", "err");
         }
       }
     } catch (err) {}
@@ -1431,7 +1472,7 @@ function initWS() {
     wsMouseReady = false;
     if (!opened) {
       certBanner.style.display = "block";
-      setStatus("TV certificate approval required (see banner above)", "warn");
+      setStatus("Cert required", "warn");
     }
   };
 
@@ -1443,17 +1484,17 @@ function initWS() {
     wsMouseReady = false;
     if (!opened) {
       certBanner.style.display = "block";
-      setStatus("TV certificate approval required (see banner above)", "warn");
+      setStatus("Cert required", "warn");
     } else if (!wasConn) {
       authRetryCount++;
       if (authRetryCount <= MAX_AUTH_RETRIES) {
-        setStatus("Pairing prompt timed out on TV (" + authRetryCount + "/" + MAX_AUTH_RETRIES + "). Retrying…", "warn");
+        setStatus("Pairing timeout (" + authRetryCount + "/" + MAX_AUTH_RETRIES + ")", "warn");
         setTimeout(function () { initWS(); }, 2000);
       } else {
-        setStatus("Pairing timed out on TV. Click Reconnect to try again.", "err");
+        setStatus("Pairing timed out", "err");
       }
     } else {
-      setStatus("Disconnected from TV. Click Reconnect to resume.", "warn");
+      setStatus("Disconnected", "warn");
     }
   };
 }
