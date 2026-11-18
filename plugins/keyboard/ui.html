@@ -1256,46 +1256,68 @@ var WS_KEY_MAP = {
   "minus": "KEY_MINUS"
 };
 
+var activeHoldKey = null;
+var holdTimer = null;
+var isActuallyHolding = false;
+
 function pressDown(key) {
   if (document.activeElement === ti) {
     ti.blur();
   }
   if (!key || activeHoldKey === key) return;
   activeHoldKey = key;
-  if (wsConnected && ws && ws.readyState === WebSocket.OPEN && WS_KEY_MAP[key]) {
-    try {
-      ws.send(JSON.stringify({
-        method: "ms.remote.control",
-        params: { Cmd: "Press", DataOfCmd: WS_KEY_MAP[key], Option: "false", TypeOfRemote: "SendRemoteKey" }
-      }));
-      return;
-    } catch (e) { wsConnected = false; }
-  }
-  fetch("key", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ key: key, action: "down" })
-  }).catch(function () {});
+  isActuallyHolding = false;
+
+  sendKey(key);
+
+  if (holdTimer) clearTimeout(holdTimer);
+  holdTimer = setTimeout(function () {
+    if (activeHoldKey !== key) return;
+    isActuallyHolding = true;
+    if (wsConnected && ws && ws.readyState === WebSocket.OPEN && WS_KEY_MAP[key]) {
+      try {
+        ws.send(JSON.stringify({
+          method: "ms.remote.control",
+          params: { Cmd: "Press", DataOfCmd: WS_KEY_MAP[key], Option: "false", TypeOfRemote: "SendRemoteKey" }
+        }));
+        return;
+      } catch (e) { wsConnected = false; }
+    }
+    fetch("key", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: key, action: "down" })
+    }).catch(function () {});
+  }, 280);
 }
 
 function releaseUp(key) {
   var k = key || activeHoldKey;
   if (!k) return;
-  activeHoldKey = null;
-  if (wsConnected && ws && ws.readyState === WebSocket.OPEN && WS_KEY_MAP[k]) {
-    try {
-      ws.send(JSON.stringify({
-        method: "ms.remote.control",
-        params: { Cmd: "Release", DataOfCmd: WS_KEY_MAP[k], Option: "false", TypeOfRemote: "SendRemoteKey" }
-      }));
-      return;
-    } catch (e) { wsConnected = false; }
+  if (holdTimer) {
+    clearTimeout(holdTimer);
+    holdTimer = null;
   }
-  fetch("key", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ key: k, action: "up" })
-  }).catch(function () {});
+  var wasHolding = isActuallyHolding;
+  activeHoldKey = null;
+  isActuallyHolding = false;
+
+  if (wasHolding) {
+    if (wsConnected && ws && ws.readyState === WebSocket.OPEN && WS_KEY_MAP[k]) {
+      try {
+        ws.send(JSON.stringify({
+          method: "ms.remote.control",
+          params: { Cmd: "Release", DataOfCmd: WS_KEY_MAP[k], Option: "false", TypeOfRemote: "SendRemoteKey" }
+        }));
+        return;
+      } catch (e) { wsConnected = false; }
+    }
+    fetch("key", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: k, action: "up" })
+    }).catch(function () {});
+  }
 }
 
 function sendKey(key, shift, ctrl) {
@@ -1330,6 +1352,7 @@ function initWS() {
   if (wsConnected) return;
   if (wsConnecting) return;
   wsConnecting = true;
+  setStatus("Connecting to TV…", "busy");
 
   var port = 8002;
   var proto = "wss://";
@@ -1362,6 +1385,11 @@ function initWS() {
   currentWs.onopen = function () {
     opened = true;
     clearTimeout(connTimer);
+    if (!tvToken) {
+      setStatus("Pairing prompt sent to TV — please select 'Allow' on your TV screen", "warn");
+    } else {
+      setStatus("Authenticating with TV…", "busy");
+    }
   };
 
   currentWs.onmessage = function (e) {
@@ -1405,8 +1433,8 @@ function initWS() {
         }).catch(function () {});
         authRetryCount++;
         if (authRetryCount <= MAX_AUTH_RETRIES) {
-          setStatus("Pairing required (" + authRetryCount + "/" + MAX_AUTH_RETRIES + ") — please select 'Allow' on your TV screen", "warn");
-          setTimeout(function () { initWS(); }, 1500);
+          setStatus("Pairing denied on TV (" + authRetryCount + "/" + MAX_AUTH_RETRIES + "). Retrying…", "warn");
+          setTimeout(function () { initWS(); }, 2000);
         } else {
           setStatus("Pairing was not accepted on TV. Click Reconnect to try again.", "err");
         }
@@ -1427,9 +1455,24 @@ function initWS() {
 
   currentWs.onclose = function () {
     clearTimeout(connTimer);
+    var wasConn = wsConnected;
     wsConnected = false;
     wsConnecting = false;
     wsMouseReady = false;
+    if (!opened) {
+      certBanner.style.display = "block";
+      setStatus("TV certificate approval required (see banner above)", "warn");
+    } else if (!wasConn) {
+      authRetryCount++;
+      if (authRetryCount <= MAX_AUTH_RETRIES) {
+        setStatus("Pairing prompt timed out on TV (" + authRetryCount + "/" + MAX_AUTH_RETRIES + "). Retrying…", "warn");
+        setTimeout(function () { initWS(); }, 2000);
+      } else {
+        setStatus("Pairing timed out on TV. Click Reconnect to try again.", "err");
+      }
+    } else {
+      setStatus("Disconnected from TV. Click Reconnect to resume.", "warn");
+    }
   };
 }
 

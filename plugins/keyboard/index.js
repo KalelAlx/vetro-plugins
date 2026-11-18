@@ -193,7 +193,6 @@ module.exports = function (ctx) {
         stopHold();
         activeHoldKey = key;
         var started = Date.now();
-        ctx.execute('/usr/bin/input_keyevent ' + key + ' down', 2000).catch(function () {});
 
         function step() {
             if (!activeHoldKey || activeHoldKey !== key || Date.now() - started > 6000) {
@@ -203,7 +202,7 @@ module.exports = function (ctx) {
             ctx.execute('/usr/bin/input_keyevent ' + key, 2000)
                 .then(function () {
                     if (activeHoldKey === key && Date.now() - started <= 6000) {
-                        activeHoldTimer = setTimeout(step, 75);
+                        activeHoldTimer = setTimeout(step, 15);
                     } else {
                         stopHold();
                     }
@@ -211,7 +210,7 @@ module.exports = function (ctx) {
                     stopHold();
                 });
         }
-        activeHoldTimer = setTimeout(step, 75);
+        step();
     }
 
     function getCfg() {
