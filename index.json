@@ -49,8 +49,8 @@
       "description": "A Home Assistant card in Vetro's Control center for lights, switches, scenes and scripts. Talks only to the Home Assistant address you set (REST API).",
       "permissions": [],
       "url": "dist/home-assistant-0.1.0.vplugin",
-      "sha256": "50158ea7fb0858b9b062f7784bd1d890e4b187f702900cf6a38c63bc94cc9c28",
-      "size": 38414,
+      "sha256": "6dde8c3824abf40b33495e52ceddd8501d1ba3124f6f389800b35176ca732aec",
+      "size": 38242,
       "controlCenter": {
         "label": "Home Assistant"
       }

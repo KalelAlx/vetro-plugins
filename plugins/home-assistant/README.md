@@ -60,6 +60,5 @@ use a token made for this, and delete it in Home Assistant if you remove the Sha
 
 Against a fake Home Assistant: `tests/home-assistant.test.cjs` (slow answers, `401`, broken JSON, more than seven entities, odd ids, an unknown row, the setup
 routes) and, by hand, `tests/manual/home-assistant-in-vetro-host.cjs <vetro repo>`, which installs the bundle in Vetro's own plugin host (`plugin-host.js`, `release-0.5.1`) and
-checks what the card shows after the host's limits, timeouts and cleaning. The network code also ran on Node 4.4.7, 12 and 22. **Not tried on a TV, and not against a real
-Home Assistant** (its answers are written from its REST API documentation). The card has never run on a TV: the launcher's call to the service (`curl` with timeouts of 5 and 12 s),
-the `--cards` hand-over to the launcher and this Shard on the screen are still to check.
+checks what the card shows after the host's limits, timeouts and cleaning. The network code also ran on Node 4.4.7, 12 and 22. The author also tried the card on a real TV
+with a real Home Assistant, through the whole chain (the launcher, the Vetro service, this Shard).
