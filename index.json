@@ -115,22 +115,22 @@
     {
       "id": "youtube",
       "name": "Ad-free YouTube",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "author": "andrearicci93",
       "description": "Samsung's own YouTube with ads blocked, Shorts hidden and sponsors skipped (TizenTube). Local proxy; fetches one pinned script from cdn.jsdelivr.net.",
       "permissions": [
         "exec"
       ],
-      "url": "dist/youtube-0.4.0.vplugin",
-      "sha256": "1e21d1b479312671f7451db84a6843f10cde32c238d0ffcee85f4985f723048f",
-      "size": 77740,
+      "url": "dist/youtube-0.4.1.vplugin",
+      "sha256": "ccbf4fb3bfb4f025682b197db734d6f7a8965ec4bb71d7a743ed1564f1018389",
+      "size": 92998,
       "intercepts": [
         {
           "appId": "com.samsung.tv.cobalt-yt",
           "label": "YouTube"
         }
       ],
-      "signature": "ScMkcwuyYW4NufJIi5Cmn7R8+UHPNSryad7gGc24muYJDVewuCON7wqgLnudBy/pYoDwGqjPQqg5cCFWF9gH7CqKGptcvGkpEOJTOAKabDTSNhrhCa4yhRp8peONlk6Al1x+1F9ojdTPrp7Sh0jAycmRqTvWC0wjp53BXnwQSoa1KArkO2k6w8EQPOtQQNptwI7tBca2K8HMWOO/P7geEOfR+Lybr9jjyvhIIj4t8VBnc+PvLO5WTPOh/iDBYiqF+Kjdi0uYZ7pIqxCphHoHbojVTrS1Z29ZloxH93JnH84hOqZ54tH4skTKPnF6uGQW3m0lWVqCR2RQZWyC1FnAJoSNnA6fn2Z/EFpoUAldoh3sZPOY/7zIrJHEjeGi37dAIDt0USaU0joQKVTfs1+ZrwsFtHCa06ZWiOVNceSFXFhZmNRwXZrWSC/oNNPIMOs2Zs6CzLcvt6g8V1Od9em3skqApEea5qBJm7VKiR0nz+/+nZf39qPHShMZjf8FTBM3"
+      "signature": "gHme/8hpDfI6vaHlnotWq1ilVzV+iH/QwqsV+rZKwF0PQREtzDh2eDZRAV9d5FGeHJTWieTv50AI4cib9wn4e7iT8Df6Lekwg/KJRltkLPTiMhcxLo08MoIvPyHPrdbUtFv9yd9yB7nOYCHdC7/LBvURhpXA1v3xNVmZfxtcwHwBv2nfJuVPsTNlWMVQXgpC48jBHEfMTKrHLe96mjMPCdogLQads4Zi4LAQTGVktFmGdlfuawuo5GRAzmM1yP2CRhxukPba6EKMQvFLBu0AAin5S/g6u+uyu8GPsYL6wSydPx0bQlNCEN7l64p5us9f2oU7zwzwwGVPIGrQFO/Kcurg0YUtyMV/bj5yFPyjnVxcBDsYd54cTUHrUPsQwqWAWmeyzaWxkUHeT0b4zWlQl0FX9FtUAsFOTnuKB0tsdTDkTdszL0jr2xucbMYEZy5w2DzkJPYJnq3DqsNfcGVyqCnlS3FT9kOHVHc6PD9gRrLnmIX3RTntOBAYtK/T/gg7"
     }
   ]
 }
