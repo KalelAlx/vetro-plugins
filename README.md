@@ -11,6 +11,7 @@ dashboard shows under **Vetro Shards → Load plugin catalog**, the source of ev
 | [`art-sql`](plugins/art-sql) | Read-only SQL API (Datasette-style JSON) over the Art app's database, for other apps on your network | `exec` | bertrandom |
 | [`bedtime`](plugins/bedtime) | Turn the TV off at set times or after a sleep timer, or open an app on a schedule | `exec` | piecifra |
 | [`eightbitdo-guide`](plugins/eightbitdo-guide) | Open Vetro with Guide on the Bluetooth 8BitDo Ultimate 2 Wireless; forward other buttons and axes | `exec` | augusto1024 |
+| [`home-assistant`](plugins/home-assistant) | A **Control center card** (Vetro 0.5.1): switch Home Assistant lights, switches, scenes and scripts from the TV's remote. The example Shard for the card API | none | andrearicci93 |
 | [`nordvpn`](plugins/nordvpn) | NordVPN (NordLynx/WireGuard) on the TV: country, kill switch, reconnect | `exec` | piecifra |
 | [`prometheus`](plugins/prometheus) | Prometheus metrics for the TV (CPU, memory, network, Wi-Fi signal, SoC temperature), `node_exporter` names | none | piecifra |
 | [`shell`](plugins/shell) | A root shell on the TV, laid out like a terminal; one command at a time, `cd` remembered | `exec` | piecifra |
@@ -19,6 +20,9 @@ dashboard shows under **Vetro Shards → Load plugin catalog**, the source of ev
 | [`tv-reboot`](plugins/tv-reboot) | A button that restarts the TV; refuses while Samsung Home is disabled | `exec` | genesai |
 | [`tv-uptime`](plugins/tv-uptime) | How long the TV has been on | `exec` | andrearicci93 |
 | [`youtube`](plugins/youtube) | **Ad-free YouTube**: Samsung's own YouTube with ads blocked, Shorts hidden and sponsors skipped (TizenTube + SponsorBlock), nothing installed on the TV | `exec` | andrearicci93 |
+
+A Shard can also add **one card to the launcher's Control center** (`controlCenter` in the manifest, used by `home-assistant`; needs Vetro 0.5.1): a short list of rows
+that the remote switches with OK. See [Adding a card to the Control center](docs/writing-a-plugin.md#adding-a-card-to-the-control-center).
 
 A Shard can also take over the launcher tile of an app (`intercepts` in the manifest, used by `youtube`): the dashboard says so on its card
 and Vetro starts the app itself if the Shard cannot. See [Writing a Shard](docs/writing-a-plugin.md#taking-over-an-apps-launcher-tile).
@@ -72,11 +76,12 @@ When a page of this repository says "plugin", it is talking about a technical na
 - **Save its own settings** in one `config.json` that survives updates.
 - Run **timers and sockets** while it is on, for example to poll something.
 - Run **shell commands on the TV as root**, if it declares the `exec` permission.
+- Add **one card to the Control center** on the TV (Vetro 0.5.1): a list of rows with a state, that OK on the remote switches.
 
 ## What a Shard cannot do
 
 Through the API, a Shard cannot listen to the remote control, react to "TV turned on" or "app opened", add a launcher
-tile, read or change Vetro's settings, use the MQTT / Home Assistant link, add a second page, or run while it is switched
+tile of its own (it can only take over an existing app's, with `intercepts`), draw anything on the TV screen but one Control center card, read or change Vetro's settings, use the MQTT / Home Assistant link, add a second page, or run while it is switched
 off. It also cannot extend Vetro's own features (Remapper, Home Assistant, Quick settings): they are not Shards and the
 host hands them nothing. The Launcher is the one feature that is a Shard (since 0.5.0), but it ships inside Vetro,
 cannot be replaced or removed, and gets private services that no catalog Shard receives.
@@ -104,7 +109,8 @@ out of date.
 | [CONTRIBUTING.md](CONTRIBUTING.md) | what a pull request contains and what the maintainer checks |
 | [SECURITY.md](SECURITY.md) | how to report a malicious or unsafe Shard |
 
-The Shard API (called plugin API 1 in the code) is the same in Vetro 0.4.0 and 0.5.0, and is experimental. It may change.
+The Shard API (called plugin API 1 in the code) is the same in Vetro 0.4.0 and 0.5.0, and is experimental. It may change. Vetro 0.5.1 adds two optional
+manifest keys, `intercepts` and `controlCenter`; older versions ignore them and load the Shard without that part.
 
 ## Repository layout
 
