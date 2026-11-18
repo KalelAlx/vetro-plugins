@@ -45,6 +45,21 @@
       "signature": "C8w4SGFZFC+LJpKuabx9+GJpzIxVaOuQWT1sihtqE9o0Ec6g0GyG3JIE7v5TiaCsmO/MkoCbsI2/LCTIwUj5yuL7U9R4tUE7CCFTxWJ8H6drSKYvJhMGKIABq8tAHUnvuYvA5VJ496evhJ8cHtAj6wnjdYVNSkCemVzJi7ANXDHBW8q/zL6VSE4uMMA7szz5qnw18jkfg0hLCSbF+s3mFR3TzJE1U1qqe6TqAj4YmLCINy5SLLo+aL66xtliC8ZigZNSJMlHjpd8Tv35xJeTo2rcHGV1E0CjMw7xMXIpAsxc+gmkU6Y8ZlBEvKB/wMGPBroGZ8NCkcQ0LoiMxrxK0kOjFHPHdDjkb+C770D/GLB/XAkLqaKme/EH7xn9PKJ0J3D7iu8W0LJ90s7MmOcYgahBMqlAd974ejUvTOodOUxm9GnjoDA3zNTBu0TRx6XWQWoRhVc6yCawVs/gDcOkbGOiLCY8wdOymy64Xl0Bn34c6ov7yjAnMpl+sEOAQCio"
     },
     {
+      "id": "home-assistant",
+      "name": "Home Assistant",
+      "version": "0.1.0",
+      "author": "andrearicci93",
+      "description": "A Home Assistant card in Vetro's Control center for lights, switches, scenes and scripts. Talks only to the Home Assistant address you set (REST API).",
+      "permissions": [],
+      "url": "dist/home-assistant-0.1.0.vplugin",
+      "sha256": "b6cc8eae731a3d2df052ec6c567986f98736e547962125de3a088111fb6fc3d0",
+      "size": 38242,
+      "controlCenter": {
+        "label": "Home Assistant"
+      },
+      "signature": "qGdYZLPhvV99mSA4iE2DwJQZMEcgLuByPFufxN1OntVJRpR6ALExhYcvMXQh+Z8i81dXv8mS/1SGVhEdF9f+1F63JN4RqZOmdQlsYG3YxvT60f+81cH76WRBjtDep3mhQ4Th5IS9FEgotP4HRmKW+KRPlFn7GDl1P3fcwCyZpTr3QUw0LNLH37lo/omuYJ6WxDz9Yc5xEgez4BWBu9riZUXqcG65o0S1CHDXEmU4VKCoGzMQp0cPHW+7L3WVmKTqWPg6JgNaKUdamEL8QbIvfhBt6VeoSn3o1BgWgUOARK6r6FZh7YvemBOBfGdwaRwXtpEyU5c5usZiHq3igeisVGlLL3DGm+OJsNEd0SRDdzUvHWvAccwGAEwaZsUyp6lUIBcoH8gH4QaifOiQypIKJIeM9MauhyjheDntGU7oSGiwoqPlTjvNRnCb/hJtyRS6fbS2Q2VqSGbHxLe06GgLG7oaZ3eQksYo+rDhqY7GA6Z4VqCTFYKP8+kHPlFGhJUF"
+    },
+    {
       "id": "nordvpn",
       "name": "NordVPN",
       "version": "1.0.0",
