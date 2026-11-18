@@ -1257,8 +1257,6 @@ var WS_KEY_MAP = {
 };
 
 var activeHoldKey = null;
-var holdTimer = null;
-var isActuallyHolding = false;
 
 function pressDown(key) {
   if (document.activeElement === ti) {
@@ -1266,58 +1264,42 @@ function pressDown(key) {
   }
   if (!key || activeHoldKey === key) return;
   activeHoldKey = key;
-  isActuallyHolding = false;
 
-  sendKey(key);
-
-  if (holdTimer) clearTimeout(holdTimer);
-  holdTimer = setTimeout(function () {
-    if (activeHoldKey !== key) return;
-    isActuallyHolding = true;
-    if (wsConnected && ws && ws.readyState === WebSocket.OPEN && WS_KEY_MAP[key]) {
-      try {
-        ws.send(JSON.stringify({
-          method: "ms.remote.control",
-          params: { Cmd: "Press", DataOfCmd: WS_KEY_MAP[key], Option: "false", TypeOfRemote: "SendRemoteKey" }
-        }));
-        return;
-      } catch (e) { wsConnected = false; }
-    }
-    fetch("key", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ key: key, action: "down" })
-    }).catch(function () {});
-  }, 280);
+  if (wsConnected && ws && ws.readyState === WebSocket.OPEN && WS_KEY_MAP[key]) {
+    try {
+      ws.send(JSON.stringify({
+        method: "ms.remote.control",
+        params: { Cmd: "Press", DataOfCmd: WS_KEY_MAP[key], Option: "false", TypeOfRemote: "SendRemoteKey" }
+      }));
+      return;
+    } catch (e) { wsConnected = false; }
+  }
+  fetch("key", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key: key, action: "down" })
+  }).catch(function () {});
 }
 
 function releaseUp(key) {
   var k = key || activeHoldKey;
   if (!k) return;
-  if (holdTimer) {
-    clearTimeout(holdTimer);
-    holdTimer = null;
-  }
-  var wasHolding = isActuallyHolding;
   activeHoldKey = null;
-  isActuallyHolding = false;
 
-  if (wasHolding) {
-    if (wsConnected && ws && ws.readyState === WebSocket.OPEN && WS_KEY_MAP[k]) {
-      try {
-        ws.send(JSON.stringify({
-          method: "ms.remote.control",
-          params: { Cmd: "Release", DataOfCmd: WS_KEY_MAP[k], Option: "false", TypeOfRemote: "SendRemoteKey" }
-        }));
-        return;
-      } catch (e) { wsConnected = false; }
-    }
-    fetch("key", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ key: k, action: "up" })
-    }).catch(function () {});
+  if (wsConnected && ws && ws.readyState === WebSocket.OPEN && WS_KEY_MAP[k]) {
+    try {
+      ws.send(JSON.stringify({
+        method: "ms.remote.control",
+        params: { Cmd: "Release", DataOfCmd: WS_KEY_MAP[k], Option: "false", TypeOfRemote: "SendRemoteKey" }
+      }));
+      return;
+    } catch (e) { wsConnected = false; }
   }
+  fetch("key", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key: k, action: "up" })
+  }).catch(function () {});
 }
 
 function sendKey(key, shift, ctrl) {
