@@ -1,6 +1,7 @@
 # What a Vetro Shard can and cannot do
 
-Written against Vetro **0.4.0** and **0.5.0**, plugin API **1** (experimental), which did not change between the two.
+Written against Vetro **0.4.0**, **0.5.0** and **0.5.1**, plugin API **1** (experimental). It did not change between 0.4.0 and 0.5.0. Vetro 0.5.1 adds
+two optional manifest keys, `intercepts` (a `launch` method) and `controlCenter` (`card` and `cardSelect` methods); older versions ignore them.
 Since 0.5.0 the dashboard calls the plugin system **Vetro Shards** and one plugin a **Shard**; 0.4.0 calls the same page
 *Plugins*. Only that name changed: the code, the `permissions` field, the `.vplugin` bundles and the routes still say
 "plugin". Everything here comes from the host's code
@@ -30,7 +31,7 @@ is "what does the API give me, and what will the catalog accept".
 |  | What |
 | --- | --- |
 | **Supported** | one page in the dashboard · its own HTTP routes · its own saved settings · timers and sockets while it runs · shell commands as root, with `exec` |
-| **Not offered by the API** | remote-control events · "TV turned on" or "app opened" callbacks · launcher tiles · anything drawn on the TV screen · Vetro's settings · the MQTT / Home Assistant link · a second page · running while switched off |
+| **Not offered by the API** | remote-control events · "TV turned on" or "app opened" callbacks · launcher tiles of its own (only `intercepts`, which takes over an app's) · anything drawn on the TV screen but one Control center card · Vetro's settings · the MQTT / Home Assistant link · a second page · running while switched off |
 | **Possible but forbidden by this catalog** | `eval`, `new Function`, minified code, code downloaded at run time, network calls the description does not mention, collecting data about the user, the TV or the network, `exec` without saying which commands |
 
 The three rows are three different things:
@@ -51,10 +52,11 @@ Checked by the host. A Shard cannot opt out of any of these.
 | **Failing Shards are switched off** | Calls into `start`, `status` and `route` are guarded. After **3 errors in a row** the Shard is stopped and shown as *Failed* with the last message. If `start()` throws, `stop()` is called so it can release what it took. |
 | **Safe mode** | If a boot does not stay up for 60 seconds, the next one starts with every Shard paused. They are still listed, so you can switch off or remove the culprit, then resume. |
 | **Text only, small** | A bundle is at most **20 files and 512 KB** in total, text only: no binaries, no native code, no `node_modules`. File names use `a-z A-Z 0-9 . _ -` and `/`. |
-| **Manifest limits** | `id` 2-32 chars (`a-z 0-9 -`, starts with a letter, not `install`, `resume` or `developer`; nor the id of a built-in Shard such as `launcher`) · `name` ≤ 40 · `version` ≤ 24 · `description` ≤ 160 · `author` ≤ 60 · `ui.label` 1-24 · `intercepts` 1-3 apps, each `appId` a Tizen id (`a-z A-Z 0-9 . _ -`) and `label` 1-24 plain characters · `apiVersion` must be `1` · `permissions` may only contain `exec`. |
+| **Manifest limits** | `id` 2-32 chars (`a-z 0-9 -`, starts with a letter, not `install`, `resume` or `developer`; nor the id of a built-in Shard such as `launcher`) · `name` ≤ 40 · `version` ≤ 24 · `description` ≤ 160 · `author` ≤ 60 · `ui.label` 1-24 · `intercepts` 1-3 apps, each `appId` a Tizen id (`a-z A-Z 0-9 . _ -`) and `label` 1-24 plain characters · `controlCenter.label` 1-24 plain characters · `apiVersion` must be `1` · `permissions` may only contain `exec`. |
 | **Unsigned installs need Developer mode** | A Shard the catalog has not signed, including one installed from a file, installs only with **Developer mode** on. It is off by default and asks for confirmation. In 0.5.0 this holds for every build; in 0.4.0 only for builds that have the catalog's key. |
 | **Built-in Shards are protected** | A Shard that ships inside Vetro (since 0.5.0: `launcher`) cannot be replaced by a bundle or removed, and keeps running in safe mode. Only built-in Shards receive `ctx.vetro`, Vetro's own services; a catalog Shard never does. |
 | **Taking over a launcher tile** | A manifest `intercepts` list makes the Vetro launcher call the Shard's `launch(appId)` for those apps' tiles while the Shard is on. It is not a permission, the dashboard shows **Intercepts the &lt;app&gt; app** on the Shard's card and in the install question, and Vetro starts the app itself if the Shard is off, declines, fails or takes more than 2 minutes. The launcher never reads anything from the Shard: it only learns which tiles are taken over. Two Shards claiming the same app: neither takes it, and the dashboard shows the conflict. |
+| **A card in the Control center** | A manifest `controlCenter` (`{ "label": "…" }`) makes the Vetro launcher's Control center show one card from the Shard's `card()` and `cardSelect(rowId)` while the Shard is on (Vetro 0.5.1; older versions ignore the key). It is not a permission. Vetro cleans everything the Shard returns (at most 7 rows, `label` 40, `value` 24, `note` 80 characters, no control characters), reads time out at 3 s and presses at 10 s, and errors are the card's own ("Not available"), never counted towards the 3 that switch a Shard off. The launcher never runs Shard code: it asks the Vetro service on the TV, which asks the Shard. The user has to turn the card on in Vetro UI → Launcher → Control center. |
 | **Own saved data** | `ctx.config` reads and writes one file, `config.json`, in the Shard's own folder. Nothing else survives an update; Remove deletes it. |
 | **`ctx.execute` needs `exec`** | Without the permission, `ctx.execute` rejects. This is the only thing the permission gates (see section 4). |
 | **Pages are sandboxed** | Everything under `/api/` is served with `Content-Security-Policy: sandbox allow-scripts`. The page runs in a frame with scripts but without cookies, storage or the dashboard's origin. It gets a **session token in its URL** that opens that Shard's routes only, expires after 8 hours and ends when the Shard is switched off. |
@@ -96,7 +98,7 @@ once, before the merge. That is a spot check, not an audit.
 
 ```js
 module.exports = function (ctx) {
-    return { start, stop, status, route };   // all four optional
+    return { start, stop, status, route };   // all four optional (plus launch, or card and cardSelect, if the manifest asks for them)
 };
 ```
 
@@ -118,16 +120,18 @@ module.exports = function (ctx) {
 | `stop()` | It is switched off, or `start()` threw. Close everything you opened. |
 | `status()` | The dashboard asks for the Shard's detail. Returns an object. Called often: keep it cheap. |
 | `route(req, res, sub)` | A request to `/plugins/<id>/api/<sub>`. Return `true` when you answered, `false` when it is not yours. |
+| `card()` | Only with `controlCenter` (Vetro 0.5.1). The Control center opens: return `{ rows: [{ id, label, value?, ticked? }], note?, choosable? }`, or a Promise of it. Vetro gives it 3 seconds. |
+| `cardSelect(rowId)` | Only with `controlCenter`. OK on a row: do it, return `{ ok, note?, rows? }`, or a Promise. 10 seconds. OK on a ticked row is ignored by the Control center. |
 
 **A page.** With `"ui": { "label": "…" }` in the manifest, `GET api/ui` must return HTML. The dashboard shows it as a
 tab while the Shard is on.
 
 ## 7. What the API does not give a Shard
 
-`ctx` has exactly four members: `id`, `dir`, `config`, `execute`. The host has no other hook, so there is **no**:
+`ctx` has exactly four members: `id`, `dir`, `config`, `execute`. The host has no other hook (beyond the `launch`, `card` and `cardSelect` methods that the manifest keys `intercepts` and `controlCenter` switch on), so there is **no**:
 
 - remote-control or key events, and no "when the TV turns on" or "when an app opens" callback;
-- way to add a launcher tile, a sidebar item, a notification or anything on the TV screen;
+- way to add a launcher tile of your own (`intercepts` only takes over an app's), a sidebar item, a notification or anything on the TV screen except one Control center card (`controlCenter`);
 - access to Vetro's settings, its paired devices, or the MQTT / Home Assistant connection through the API;
 - scheduler: if you need to poll, start your own timer in `start()` and clear it in `stop()`;
 - HTTP client: use Node's own `http` / `https`, and declare the hosts in `description` and README;
