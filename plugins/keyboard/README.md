@@ -11,7 +11,8 @@ Type text in any language from your browser into focused input fields on your Sa
 Adds a unified **Keyboard** tab to the Vetro dashboard:
 - **Text Input & Direct PC Keyboard Typing:**
   - **Instant Physical Keyboard Typing:** On PC, any letter (lowercase or uppercase with <kbd>Shift</kbd>), digit, space, symbol, or pasted text (<kbd>Ctrl+V</kbd>) typed on your keyboard is sent directly to the TV the moment you press the key—without having to focus the input box or press Enter/Send. Non-ASCII languages (such as Arabic) automatically accumulate characters into words and phrases via direct text buffering, and Backspace seamlessly deletes the last character.
-  - **Direct Remote & Editing Shortcuts:** Press <kbd>Enter</kbd> or <kbd>Ctrl+Enter</kbd> to send an `OK` (`Return`) click, <kbd>Ctrl+A</kbd> to Select All in the focused TV input field, <kbd>Backspace</kbd> to delete on TV, <kbd>Escape</kbd> to go Back, and <kbd>Arrow keys</kbd> to navigate.
+  - **Direct Remote & Editing Shortcuts:** Press <kbd>Enter</kbd> to send typed text (in input box) or submit focused field / URL bar (outside input box), <kbd>Ctrl+Enter</kbd> to send an `OK` (`Return`) click, <kbd>Ctrl+S</kbd> to open Search, <kbd>Ctrl+A</kbd> to Select All, <kbd>Ctrl+Z</kbd> to Undo, <kbd>Backspace</kbd> to delete on TV, <kbd>Escape</kbd> to go Back, <kbd>Home</kbd> to open TV Home, and <kbd>Arrow keys</kbd> to navigate.
+  - **Dynamic Device Pairing Name:** Automatically identifies pairing requests on your TV screen by device and browser (e.g. `Vetro (Windows Chrome)`, `Vetro (Android Chrome)`), with optional custom naming via `localStorage.setItem("vetro_client_name", "My PC")`, so you always know which device is connecting.
   - **Mobile On-Screen Keyboard Support:** In fullscreen theater mode (`#screen`), mobile devices keep the input box docked at the bottom so you can tap to summon the mobile virtual keyboard, while PC hides it to maximize 100% vertical screen space (with a `⌨ Input` toolbar button to toggle on/off at will).
 - **Interactive Live Screen Preview:** Expandable full-width 1080p TV display preview with direct pointer & gesture control:
   - **Pointer Mode (`🖱 Pointer`):** Tap to click, double-tap to double-click, press & hold, press & drag (for sliders, scrollbars, and text selection), right-click, `Move only` hover mode, and scroll wheel support across the entire `1920×1080` screen (browser chrome, tabs, URL bar, web pages, and pointer-enabled apps).
@@ -68,11 +69,17 @@ The Screen Preview feature captures the TV's native graphics and OSD compositor 
 
 | Key | Action |
 | --- | --- |
-| `Enter` | Send typed text to TV |
+| Printable characters (letters, numbers, symbols, spaces) | Instant direct typing to TV |
+| `Enter` (in input box) | Send typed text to TV and commit |
+| `Enter` (outside input box) | Submit focused field / URL bar (Android keyboard Enter) |
 | `Ctrl+Enter` | Send OK / confirm to TV |
+| `Ctrl+S` | Open TV Search |
 | `Ctrl+A` | Select all text in focused TV input field |
-| `Backspace` on empty box | Send Backspace to TV |
-| `Escape` | Send Escape / Back to TV |
+| `Ctrl+V` (or paste) | Paste text directly to TV |
+| `Ctrl+Z` | Undo in focused TV input field |
+| `Backspace` (in empty box) | Send Backspace to TV |
+| `Escape` | Send Back to TV |
+| `Home` | Open TV Home / Smart Hub |
 | Arrow keys (held or pressed) | Move TV cursor / D-Pad |
 
 ## Tested Environment

@@ -687,6 +687,9 @@ button.danger:hover { background: rgba(248, 81, 73, .22); }
   .input-btns button {
     padding: var(--s2) 8px;
   }
+  #keyboard-body .notice {
+    display: none;
+  }
 }
 .screen-hint {
   margin: 6px 0 0;
@@ -1011,9 +1014,10 @@ body.is-screen-only #only-theater-actions {
             </div>
           </div>
           <p class="notice" style="margin-bottom:0">
-            <span class="kbd">Enter</span> — send &nbsp;·&nbsp;
+            <span class="kbd">Enter</span> — send / submit &nbsp;·&nbsp;
             <span class="kbd">Ctrl+Enter</span> — OK &nbsp;·&nbsp;
-            <span class="kbd">Backspace</span> on empty — TV delete
+            <span class="kbd">Ctrl+S</span> — Search &nbsp;·&nbsp;
+            <span class="kbd">Esc</span> — Back
           </p>
         </div>
       </div>
@@ -1262,6 +1266,36 @@ function utf8b64(str) {
   return btoa(unescape(encodeURIComponent(str)));
 }
 
+function getClientAppName() {
+  var stored = null;
+  try {
+    stored = localStorage.getItem("vetro_client_name");
+  } catch (e) {}
+  if (stored && typeof stored === "string" && stored.replace(/^\s+|\s+$/g, "").length > 0) {
+    return stored.replace(/^\s+|\s+$/g, "").slice(0, 30);
+  }
+
+  var ua = (typeof navigator !== "undefined" && navigator.userAgent) || "";
+  var dev = "Device";
+  if (/Android/i.test(ua)) dev = "Android";
+  else if (/iPhone/i.test(ua)) dev = "iPhone";
+  else if (/iPad/i.test(ua)) dev = "iPad";
+  else if (/Windows/i.test(ua)) dev = "Windows";
+  else if (/Macintosh|Mac OS/i.test(ua)) dev = "Mac";
+  else if (/CrOS/i.test(ua)) dev = "ChromeOS";
+  else if (/Linux/i.test(ua)) dev = "Linux";
+
+  var browser = "";
+  if (/Edg\//i.test(ua)) browser = "Edge";
+  else if (/OPR\//i.test(ua) || /Opera/i.test(ua)) browser = "Opera";
+  else if (/Chrome\//i.test(ua)) browser = "Chrome";
+  else if (/Firefox\//i.test(ua)) browser = "Firefox";
+  else if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) browser = "Safari";
+
+  var label = "Vetro (" + dev + (browser ? " " + browser : "") + ")";
+  return label.slice(0, 30);
+}
+
 // Repeatable keys that benefit from continuous hold
 var REPEAT_KEYS = {
   "Up": true, "Down": true, "Left": true, "Right": true,
@@ -1275,6 +1309,7 @@ var WS_KEY_MAP = {
   // Navigation & Core
   "Up": "KEY_UP", "Down": "KEY_DOWN", "Left": "KEY_LEFT", "Right": "KEY_RIGHT",
   "Return": "KEY_ENTER", "XF86Home": "KEY_HOME", "XF86Back": "KEY_RETURN",
+  "Escape": "KEY_RETURN",
   "XF86Exit": "KEY_EXIT", "XF86Menu": "KEY_MENU", "XF86Info": "KEY_INFO",
   // Volume & Audio
   "XF86AudioRaiseVolume": "KEY_VOLUP", "XF86AudioLowerVolume": "KEY_VOLDOWN", "XF86AudioMute": "KEY_MUTE",
@@ -1300,9 +1335,6 @@ var WS_KEY_MAP = {
 var activeHoldKey = null;
 
 function pressDown(key) {
-  if (document.activeElement === ti) {
-    ti.blur();
-  }
   if (!key || activeHoldKey === key) return;
   activeHoldKey = key;
 
@@ -1344,9 +1376,6 @@ function releaseUp(key) {
 }
 
 function sendKey(key, shift, ctrl) {
-  if (document.activeElement === ti) {
-    ti.blur();
-  }
   if (!key) return Promise.resolve();
   if (!shift && !ctrl && wsConnected && ws && ws.readyState === WebSocket.OPEN && WS_KEY_MAP[key]) {
     try {
@@ -1379,7 +1408,8 @@ function initWS() {
 
   var port = 8002;
   var proto = "wss://";
-  var appB64 = btoa("TVKeyboard");
+  var appName = getClientAppName();
+  var appB64 = utf8b64(appName);
   var url = proto + tvIp + ":" + port + "/api/v2/channels/samsung.remote.control?name=" + appB64 +
             (tvToken ? "&token=" + encodeURIComponent(tvToken) : "");
 
@@ -1511,10 +1541,10 @@ fetch("status").then(function (r) { return r.json(); }).then(function (d) {
 
 var SPECIAL = {
   ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
-  Backspace: "BackSpace", Escape: "Escape"
+  Backspace: "BackSpace", Escape: "XF86Back"
 };
 
-function sendText(text) {
+function sendText(text, submit) {
   if (!text) return;
   var isAscii = /^[\x20-\x7E]*$/.test(text);
 
@@ -1529,6 +1559,14 @@ function sendText(text) {
           TypeOfRemote: "SendInputString"
         }
       }));
+      if (submit) {
+        ws.send(JSON.stringify({
+          method: "ms.remote.control",
+          params: {
+            TypeOfRemote: "SendInputEnd"
+          }
+        }));
+      }
       setStatus("Text sent ✔", "ok");
       return;
     } catch (e) {
@@ -1545,6 +1583,13 @@ function sendText(text) {
     }).then(function (r) { return r.json(); })
       .then(function (d) {
         if (d.ok) {
+          if (submit) {
+            fetch("key", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ key: "Return" })
+            }).catch(function () {});
+          }
           if (d.dropped && d.dropped.length > 0) {
             setStatus("Text sent (unsupported chars omitted: " + d.dropped.join(" ") + ")", "warn");
           } else {
@@ -1577,28 +1622,42 @@ ti.addEventListener("keydown", function (e) {
     if (screenTime) screenTime.textContent = "Sent OK";
     return;
   }
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === "s" || e.key === "S" || e.keyCode === 83)) {
+    e.preventDefault();
+    resetDirectTextBuffer();
+    sendKey("XF86Search");
+    if (screenTime) screenTime.textContent = "Search (Ctrl+S)";
+    return;
+  }
   if (e.key === "Enter" && !e.ctrlKey) {
     e.preventDefault();
     var t = ti.value; ti.value = ""; ti.dir = "ltr";
     resetDirectTextBuffer();
     if (t) {
-      sendText(t);
-    } else {
-      sendKey("Return");
-      if (screenTime) screenTime.textContent = "Sent OK";
+      sendText(t, true);
     }
-    if (isTouch) ti.blur();
+    ti.focus();
     return;
   }
   if (e.key === "Backspace" && ti.value === "") {
     e.preventDefault();
     if (e.repeat) return;
-    pressDown("BackSpace");
+    sendDirectKey("BackSpace");
+    ti.focus();
     return;
   }
   if (e.key === "Escape") {
     e.preventDefault();
-    sendKey("Escape");
+    resetDirectTextBuffer();
+    sendKey("XF86Back");
+    if (screenTime) screenTime.textContent = "Sent Back";
+    return;
+  }
+  if ((e.key === "Home" || e.keyCode === 36) && ti.value === "") {
+    e.preventDefault();
+    resetDirectTextBuffer();
+    sendKey("XF86Home");
+    if (screenTime) screenTime.textContent = "Sent Home";
     return;
   }
   if ((e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "ArrowLeft" || e.key === "ArrowRight") && !e.ctrlKey) {
@@ -1670,7 +1729,7 @@ function pumpKeyQueue() {
   var nextItem = keyQueue.shift();
   var p;
   if (nextItem.type === "text") {
-    sendText(nextItem.text);
+    sendText(nextItem.text, false);
     p = Promise.resolve();
   } else {
     p = sendKey(nextItem.key, nextItem.shift, nextItem.ctrl);
@@ -1711,6 +1770,32 @@ function sendDirectText(text) {
   pumpKeyQueue();
 }
 
+function sendSubmit() {
+  resetDirectTextBuffer();
+  if (wsConnected && ws && ws.readyState === WebSocket.OPEN) {
+    try {
+      ws.send(JSON.stringify({
+        method: "ms.remote.control",
+        params: {
+          TypeOfRemote: "SendInputEnd"
+        }
+      }));
+      return Promise.resolve();
+    } catch (e) {
+      wsConnected = false;
+    }
+  }
+  return fetch("key", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key: "Return" })
+  }).then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d.ok) setStatus("Failed: " + (d.error || d.stderr || ""), "err");
+    })
+    .catch(function () { setStatus("Network error", "err"); });
+}
+
 document.addEventListener("keydown", function (e) {
   // Always handle Ctrl+Enter / Cmd+Enter as OK click everywhere
   if ((e.key === "Enter" || e.keyCode === 13) && (e.ctrlKey || e.metaKey)) {
@@ -1735,17 +1820,22 @@ document.addEventListener("keydown", function (e) {
     return;
   }
 
-  // Common editing shortcuts (Ctrl+C, Ctrl+X, Ctrl+Z) directly to TV
-  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
-    var ctrlK = (e.key || "").toLowerCase();
-    if (ctrlK === "c" || ctrlK === "x" || ctrlK === "z") {
-      e.preventDefault();
-      resetDirectTextBuffer();
-      sendDirectKey(ctrlK, false, true);
-      var label = ctrlK === "c" ? "Copy (Ctrl+C)" : (ctrlK === "x" ? "Cut (Ctrl+X)" : "Undo (Ctrl+Z)");
-      if (screenTime) screenTime.textContent = label;
-      return;
-    }
+  // Ctrl+S / Cmd+S -> Open Search on TV
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === "s" || e.key === "S" || e.keyCode === 83)) {
+    e.preventDefault();
+    resetDirectTextBuffer();
+    sendKey("XF86Search");
+    if (screenTime) screenTime.textContent = "Search (Ctrl+S)";
+    return;
+  }
+
+  // Ctrl+Z / Cmd+Z -> Undo in focused input field on TV
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "z" || e.key === "Z" || e.keyCode === 90)) {
+    e.preventDefault();
+    resetDirectTextBuffer();
+    sendDirectKey("z", false, true);
+    if (screenTime) screenTime.textContent = "Undo (Ctrl+Z)";
+    return;
   }
 
   // Allow native browser shortcuts (like Ctrl+R, Ctrl+W, etc.) to pass
@@ -1753,12 +1843,11 @@ document.addEventListener("keydown", function (e) {
     return;
   }
 
-  // Enter (without Ctrl) when not in an input box -> send Return (OK) directly to TV
+  // Enter (without Ctrl) when not in an input box -> submit (act like Enter on Android keyboard)
   if (e.key === "Enter") {
     e.preventDefault();
-    resetDirectTextBuffer();
-    sendKey("Return");
-    if (screenTime) screenTime.textContent = "Sent OK";
+    sendSubmit();
+    if (screenTime) screenTime.textContent = "Submit ↵";
     return;
   }
 
@@ -1785,8 +1874,17 @@ document.addEventListener("keydown", function (e) {
   if (e.key === "Escape") {
     e.preventDefault();
     resetDirectTextBuffer();
-    sendKey("Escape");
+    sendKey("XF86Back");
     if (screenTime) screenTime.textContent = "Sent Back";
+    return;
+  }
+
+  // Home -> Open TV Home / Smart Hub
+  if (e.key === "Home" || e.keyCode === 36) {
+    e.preventDefault();
+    resetDirectTextBuffer();
+    sendKey("XF86Home");
+    if (screenTime) screenTime.textContent = "Sent Home";
     return;
   }
 
@@ -1873,16 +1971,11 @@ document.getElementById("btn-send").addEventListener("click", function () {
   var t = ti.value; ti.value = ""; ti.dir = "ltr";
   resetDirectTextBuffer();
   if (t) {
-    sendText(t);
+    sendText(t, true);
   } else {
-    sendKey("Return");
-    if (screenTime) screenTime.textContent = "Sent OK";
+    sendSubmit();
   }
-  if (!isTouch) {
-    ti.focus();
-  } else {
-    ti.blur();
-  }
+  ti.focus();
 });
 
 var btnBksp = document.getElementById("btn-bksp");
