@@ -21,27 +21,39 @@ var LATIN_MAP = {
     '.': 'period',
     ',': 'comma',
     '-': 'minus',
-    '_': 'underscore',
-    '/': 'slash',
-    ':': 'colon',
-    ';': 'semicolon',
-    '@': 'at',
-    '?': 'question',
-    '!': 'exclam',
-    '+': 'plus',
     '=': 'equal',
-    '*': 'asterisk',
-    '(': 'parenleft',
-    ')': 'parenright',
+    '/': 'slash',
+    ';': 'semicolon',
+    "'": 'apostrophe',
     '[': 'bracketleft',
-    ']': 'bracketright'
+    ']': 'bracketright',
+    '\\': 'backslash',
+    '`': 'grave'
 };
 
-function charToKey(ch) {
-    if (/^[a-zA-Z0-9]$/.test(ch)) return ch;
-    if (LATIN_MAP[ch]) return LATIN_MAP[ch];
-    return null;
-}
+var SHIFT_MAP = {
+    '!': '1',
+    '@': '2',
+    '#': '3',
+    '$': '4',
+    '%': '5',
+    '^': '6',
+    '&': '7',
+    '*': '8',
+    '(': '9',
+    ')': '0',
+    '_': 'minus',
+    '+': 'equal',
+    '~': 'grave',
+    '{': 'bracketleft',
+    '}': 'bracketright',
+    '|': 'backslash',
+    ':': 'semicolon',
+    '"': 'apostrophe',
+    '<': 'comma',
+    '>': 'period',
+    '?': 'slash'
+};
 
 function loadPage(ctx) {
     var places = [path.join(__dirname, 'ui.html'), path.join(ctx.dir || '', 'ui.html')];
@@ -196,11 +208,13 @@ module.exports = function (ctx) {
                 var body = '';
                 req.on('data', function (c) { body += c; });
                 req.on('end', function () {
-                    var parsed, key, action;
+                    var parsed, key, action, isShift, isCtrl;
                     try {
                         parsed = JSON.parse(body);
                         key = parsed.key;
                         action = parsed.action;
+                        isShift = !!parsed.shift;
+                        isCtrl = !!parsed.ctrl;
                     } catch (e) {
                         key = null;
                         action = null;
@@ -227,7 +241,22 @@ module.exports = function (ctx) {
 
                     // Single tap / click
                     stopHold();
-                    ctx.execute('/usr/bin/input_keyevent ' + key, 5000)
+
+                    if (/^[A-Z]$/.test(key)) {
+                        key = key.toLowerCase();
+                        isShift = true;
+                    }
+
+                    var cmd;
+                    if (isCtrl) {
+                        cmd = 'sh -c "/usr/bin/input_keyevent Control_L down; /usr/bin/input_keyevent ' + key + '; /usr/bin/input_keyevent Control_L up"';
+                    } else if (isShift) {
+                        cmd = 'sh -c "/usr/bin/input_keyevent Shift_L down; /usr/bin/input_keyevent ' + key + '; /usr/bin/input_keyevent Shift_L up"';
+                    } else {
+                        cmd = '/usr/bin/input_keyevent ' + key;
+                    }
+
+                    ctx.execute(cmd, 5000)
                         .then(function (r) {
                             res.writeHead(200, { 'content-type': 'application/json' });
                             res.end(JSON.stringify({ ok: r.exit_code === 0, stderr: r.stderr }));
@@ -252,17 +281,25 @@ module.exports = function (ctx) {
                         res.end(JSON.stringify({ ok: false, error: 'missing text' }));
                         return;
                     }
-                    var keys = [];
+                    var cmds = [];
                     for (var i = 0; i < text.length; i++) {
-                        var k = charToKey(text[i]);
-                        if (k) keys.push(k);
+                        var ch = text[i];
+                        if (/^[a-z0-9]$/.test(ch)) {
+                            cmds.push('/usr/bin/input_keyevent ' + ch);
+                        } else if (/^[A-Z]$/.test(ch)) {
+                            cmds.push('/usr/bin/input_keyevent Shift_L down; /usr/bin/input_keyevent ' + ch.toLowerCase() + '; /usr/bin/input_keyevent Shift_L up');
+                        } else if (SHIFT_MAP[ch]) {
+                            cmds.push('/usr/bin/input_keyevent Shift_L down; /usr/bin/input_keyevent ' + SHIFT_MAP[ch] + '; /usr/bin/input_keyevent Shift_L up');
+                        } else if (LATIN_MAP[ch]) {
+                            cmds.push('/usr/bin/input_keyevent ' + LATIN_MAP[ch]);
+                        }
                     }
-                    if (keys.length === 0) {
+                    if (cmds.length === 0) {
                         res.writeHead(200, { 'content-type': 'application/json' });
                         res.end(JSON.stringify({ ok: true }));
                         return;
                     }
-                    var cmd = "sh -c 'for k in " + keys.join(' ') + "; do /usr/bin/input_keyevent \"$k\"; sleep 0.04; done'";
+                    var cmd = "sh -c '" + cmds.join('; sleep 0.04; ') + "'";
                     ctx.execute(cmd, 15000)
                         .then(function (r) {
                             res.writeHead(200, { 'content-type': 'application/json' });

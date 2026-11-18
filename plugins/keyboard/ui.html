@@ -734,11 +734,64 @@ body.is-screen-only.is-rotated-landscape .container {
   left: 50%;
   transform: translate(-50%, -50%) rotate(90deg);
 }
-body.is-screen-only .app-layout,
 body.is-screen-only #box-screen > .box-header,
 body.is-screen-only #screen-hint,
-body.is-screen-only #standalone-banner {
+body.is-screen-only #standalone-banner,
+body.is-screen-only .col-side,
+body.is-screen-only #box-remote,
+body.is-screen-only #box-playback,
+body.is-screen-only #box-numpad,
+body.is-screen-only #box-keyboard .box-header,
+body.is-screen-only #cert-banner,
+body.is-screen-only #keyboard-body .notice {
   display: none !important;
+}
+/* By default in theater mode, hide .app-layout to save space on PC */
+body.is-screen-only .app-layout {
+  display: none !important;
+  margin: 0;
+  padding: 0;
+  flex-shrink: 0;
+}
+/* When theater input is active (on mobile by default, or toggled on), show docked input */
+body.is-screen-only.has-theater-input .app-layout {
+  display: block !important;
+}
+body.is-screen-only.has-theater-input .col-main {
+  margin: 0;
+  padding: 0;
+}
+body.is-screen-only.has-theater-input #box-keyboard {
+  margin: 0;
+  padding: 6px 10px;
+  background: var(--surface);
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+}
+body.is-screen-only.has-theater-input #box-keyboard.is-collapsed #keyboard-body {
+  display: block !important;
+}
+body.is-screen-only.has-theater-input #keyboard-body {
+  display: block !important;
+  margin: 0;
+  padding: 0;
+}
+body.is-screen-only.has-theater-input #keyboard-body .input-row {
+  margin-bottom: 0;
+  gap: 6px;
+}
+body.is-screen-only.has-theater-input #keyboard-body .input-row input {
+  height: 32px;
+  min-height: 32px;
+  font-size: var(--fs-xs);
+  padding: 0 10px;
+}
+body.is-screen-only.has-theater-input #keyboard-body .input-row button {
+  height: 32px;
+  min-height: 32px;
+  font-size: var(--fs-xs);
+  padding: 0 10px;
 }
 body.is-screen-only #box-screen {
   flex: 1;
@@ -855,10 +908,11 @@ body.is-screen-only #only-theater-actions {
             <input type="checkbox" id="chk-auto-refresh">
             <span>Auto-refresh</span>
           </label>
-          <span id="screen-time" style="font-size:var(--fs-xs);color:var(--muted);white-space:nowrap"></span>
+          <span id="screen-time" style="font-size:var(--fs-xs);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px;display:inline-block;vertical-align:middle"></span>
         </div>
         <div class="screen-action-group">
           <span id="only-theater-actions">
+            <button type="button" id="btn-theater-input" class="btn-mini" title="Toggle on-screen input bar">⌨ Input</button>
             <button type="button" id="btn-rotate-screen" class="btn-mini" title="Rotate 90° into landscape (useful on mobile with rotation locked)">↻ Rotate</button>
             <button type="button" id="btn-native-fs" class="btn-mini" title="Toggle browser Fullscreen &amp; landscape orientation">⛶ OS Fullscreen</button>
             <button type="button" id="btn-exit-theater" class="btn-mini" title="Show full Keyboard &amp; Remote plugin">🎛 Full Plugin</button>
@@ -913,6 +967,7 @@ body.is-screen-only #only-theater-actions {
             <div class="input-btns">
               <button type="button" class="primary" id="btn-send">Send ↵</button>
               <button type="button" class="danger" id="btn-bksp">⌫ Del</button>
+              <button type="button" class="btn" id="btn-select-all" title="Select all text in focused TV input (Ctrl+A)">Select All</button>
             </div>
           </div>
           <p class="notice" style="margin-bottom:0">
@@ -1055,6 +1110,8 @@ var activePort = null;
 var activeHoldKey = null;
 
 var isTouch = ("ontouchstart" in window) || (navigator.maxTouchPoints > 0);
+var isMobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+  (window.matchMedia && window.matchMedia("(pointer: coarse) and (hover: none)").matches);
 
 var statusEl = document.getElementById("status");
 var ti = document.getElementById("ti");
@@ -1226,12 +1283,12 @@ function releaseUp(key) {
   }).catch(function () {});
 }
 
-function sendKey(key) {
+function sendKey(key, shift, ctrl) {
   if (document.activeElement === ti) {
     ti.blur();
   }
   if (!key) return Promise.resolve();
-  if (wsConnected && ws && ws.readyState === WebSocket.OPEN && WS_KEY_MAP[key]) {
+  if (!shift && !ctrl && wsConnected && ws && ws.readyState === WebSocket.OPEN && WS_KEY_MAP[key]) {
     try {
       ws.send(JSON.stringify({
         method: "ms.remote.control",
@@ -1240,10 +1297,13 @@ function sendKey(key) {
       return Promise.resolve();
     } catch (e) { wsConnected = false; }
   }
+  var payload = { key: key };
+  if (shift) payload.shift = true;
+  if (ctrl) payload.ctrl = true;
   return fetch("key", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ key: key })
+    body: JSON.stringify(payload)
   }).then(function (r) { return r.json(); })
     .then(function (d) {
       if (!d.ok) setStatus("Failed: " + (d.error || d.stderr || ""), "err");
@@ -1412,19 +1472,28 @@ function sendText(text) {
 var RTL_REGEX = /[\u0591-\u07FF\uFB1D-\uFDFD\uFE70-\uFEFC]/;
 ti.addEventListener("input", function () {
   ti.dir = RTL_REGEX.test(ti.value) ? "rtl" : "ltr";
+  directTextBuffer = ti.value;
 });
 
 ti.addEventListener("keydown", function (e) {
+  if ((e.key === "Enter" || e.keyCode === 13) && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    resetDirectTextBuffer();
+    sendKey("Return");
+    if (screenTime) screenTime.textContent = "Sent OK";
+    return;
+  }
   if (e.key === "Enter" && !e.ctrlKey) {
     e.preventDefault();
     var t = ti.value; ti.value = ""; ti.dir = "ltr";
-    sendText(t);
+    resetDirectTextBuffer();
+    if (t) {
+      sendText(t);
+    } else {
+      sendKey("Return");
+      if (screenTime) screenTime.textContent = "Sent OK";
+    }
     if (isTouch) ti.blur();
-    return;
-  }
-  if (e.key === "Enter" && e.ctrlKey) {
-    e.preventDefault();
-    sendKey("Return");
     return;
   }
   if (e.key === "Backspace" && ti.value === "") {
@@ -1459,22 +1528,242 @@ ti.addEventListener("keyup", function (e) {
   }
 });
 
+var CHAR_KEY_MAP = {
+  // Base ASCII keys
+  " ": { key: "space" },
+  ".": { key: "period" },
+  ",": { key: "comma" },
+  "-": { key: "minus" },
+  "=": { key: "equal" },
+  "/": { key: "slash" },
+  ";": { key: "semicolon" },
+  "'": { key: "apostrophe" },
+  "[": { key: "bracketleft" },
+  "]": { key: "bracketright" },
+  "\\": { key: "backslash" },
+  "`": { key: "grave" },
+
+  // Shifted symbols
+  "!": { key: "1", shift: true },
+  "@": { key: "2", shift: true },
+  "#": { key: "3", shift: true },
+  "$": { key: "4", shift: true },
+  "%": { key: "5", shift: true },
+  "^": { key: "6", shift: true },
+  "&": { key: "7", shift: true },
+  "*": { key: "8", shift: true },
+  "(": { key: "9", shift: true },
+  ")": { key: "0", shift: true },
+  "_": { key: "minus", shift: true },
+  "+": { key: "equal", shift: true },
+  "~": { key: "grave", shift: true },
+  "{": { key: "bracketleft", shift: true },
+  "}": { key: "bracketright", shift: true },
+  "|": { key: "backslash", shift: true },
+  ":": { key: "semicolon", shift: true },
+  "\"": { key: "apostrophe", shift: true },
+  "<": { key: "comma", shift: true },
+  ">": { key: "period", shift: true },
+  "?": { key: "slash", shift: true }
+};
+
+var keyQueue = [];
+var keySending = false;
+
+function pumpKeyQueue() {
+  if (keySending || keyQueue.length === 0) return;
+  keySending = true;
+  var nextItem = keyQueue.shift();
+  var p;
+  if (nextItem.type === "text") {
+    sendText(nextItem.text);
+    p = Promise.resolve();
+  } else {
+    p = sendKey(nextItem.key, nextItem.shift, nextItem.ctrl);
+  }
+  (p || Promise.resolve()).then(function () {
+    keySending = false;
+    pumpKeyQueue();
+  }).catch(function () {
+    keySending = false;
+    pumpKeyQueue();
+  });
+}
+
+var directTextBuffer = "";
+
+function resetDirectTextBuffer() {
+  directTextBuffer = "";
+  if (ti && document.activeElement !== ti) {
+    ti.value = "";
+    ti.dir = "ltr";
+  }
+}
+
+function syncDirectInputMirror() {
+  if (ti && document.activeElement !== ti) {
+    ti.value = directTextBuffer;
+    ti.dir = RTL_REGEX.test(directTextBuffer) ? "rtl" : "ltr";
+  }
+}
+
+function sendDirectKey(key, shift, ctrl) {
+  keyQueue.push({ type: "key", key: key, shift: !!shift, ctrl: !!ctrl });
+  pumpKeyQueue();
+}
+
+function sendDirectText(text) {
+  keyQueue.push({ type: "text", text: text });
+  pumpKeyQueue();
+}
+
 document.addEventListener("keydown", function (e) {
-  if (document.activeElement === ti) return;
-  var key = SPECIAL[e.key];
-  if (key) {
+  // Always handle Ctrl+Enter / Cmd+Enter as OK click everywhere
+  if ((e.key === "Enter" || e.keyCode === 13) && (e.ctrlKey || e.metaKey)) {
     e.preventDefault();
-    if (e.repeat) return;
-    if (REPEAT_KEYS[key]) {
-      pressDown(key);
-    } else {
-      sendKey(key);
+    resetDirectTextBuffer();
+    sendKey("Return");
+    if (screenTime) screenTime.textContent = "Sent OK";
+    return;
+  }
+
+  // If focus is inside an input or textarea, let native input handling proceed
+  if (document.activeElement && (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA")) {
+    return;
+  }
+
+  // Ctrl+A / Cmd+A -> Select All in focused input field on TV
+  if ((e.ctrlKey || e.metaKey) && (e.key === "a" || e.key === "A" || e.keyCode === 65)) {
+    e.preventDefault();
+    resetDirectTextBuffer();
+    sendDirectKey("a", false, true);
+    if (screenTime) screenTime.textContent = "Select All (Ctrl+A)";
+    return;
+  }
+
+  // Common editing shortcuts (Ctrl+C, Ctrl+X, Ctrl+Z) directly to TV
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+    var ctrlK = (e.key || "").toLowerCase();
+    if (ctrlK === "c" || ctrlK === "x" || ctrlK === "z") {
+      e.preventDefault();
+      resetDirectTextBuffer();
+      sendDirectKey(ctrlK, false, true);
+      var label = ctrlK === "c" ? "Copy (Ctrl+C)" : (ctrlK === "x" ? "Cut (Ctrl+X)" : "Undo (Ctrl+Z)");
+      if (screenTime) screenTime.textContent = label;
+      return;
     }
+  }
+
+  // Allow native browser shortcuts (like Ctrl+R, Ctrl+W, etc.) to pass
+  if (e.ctrlKey || e.altKey || e.metaKey) {
+    return;
+  }
+
+  // Enter (without Ctrl) when not in an input box -> send Return (OK) directly to TV
+  if (e.key === "Enter") {
+    e.preventDefault();
+    resetDirectTextBuffer();
+    sendKey("Return");
+    if (screenTime) screenTime.textContent = "Sent OK";
+    return;
+  }
+
+  // Backspace when not in an input box -> delete directly on TV
+  if (e.key === "Backspace") {
+    e.preventDefault();
+    if (directTextBuffer.length > 1) {
+      directTextBuffer = directTextBuffer.slice(0, -1);
+      sendDirectText(directTextBuffer);
+      syncDirectInputMirror();
+      if (screenTime) screenTime.textContent = "Sent ⌫";
+      return;
+    }
+    if (directTextBuffer.length === 1) {
+      directTextBuffer = "";
+      syncDirectInputMirror();
+    }
+    sendDirectKey("BackSpace");
+    if (screenTime) screenTime.textContent = "Sent ⌫";
+    return;
+  }
+
+  // Escape -> Back
+  if (e.key === "Escape") {
+    e.preventDefault();
+    resetDirectTextBuffer();
+    sendKey("Escape");
+    if (screenTime) screenTime.textContent = "Sent Back";
+    return;
+  }
+
+  // Arrow keys -> continuous repeat navigation
+  if (SPECIAL[e.key]) {
+    e.preventDefault();
+    resetDirectTextBuffer();
+    if (e.repeat) return;
+    pressDown(SPECIAL[e.key]);
+    return;
+  }
+
+  // Single printable characters (letters, numbers, space, punctuation, symbols) -> direct typing to TV
+  if (e.key && e.key.length === 1) {
+    e.preventDefault();
+    if (directTextBuffer.length > 0) {
+      directTextBuffer += e.key;
+      sendDirectText(directTextBuffer);
+      syncDirectInputMirror();
+      if (screenTime) screenTime.textContent = "Typed '" + e.key + "'";
+      return;
+    }
+    var mapped = CHAR_KEY_MAP[e.key];
+    if (mapped) {
+      sendDirectKey(mapped.key, mapped.shift, false);
+      if (screenTime) screenTime.textContent = "Typed '" + e.key + "'";
+      return;
+    }
+    if (/^[A-Z]$/.test(e.key)) {
+      sendDirectKey(e.key.toLowerCase(), true, false);
+      if (screenTime) screenTime.textContent = "Typed '" + e.key + "'";
+      return;
+    }
+    if (/^[a-z0-9]$/.test(e.key)) {
+      sendDirectKey(e.key, false, false);
+      if (screenTime) screenTime.textContent = "Typed '" + e.key + "'";
+      return;
+    }
+    directTextBuffer = e.key;
+    sendDirectText(directTextBuffer);
+    syncDirectInputMirror();
+    if (screenTime) screenTime.textContent = "Typed '" + e.key + "'";
+    return;
+  }
+});
+
+document.addEventListener("paste", function (e) {
+  if (document.activeElement && (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA")) {
+    return;
+  }
+  var clip = e.clipboardData || window.clipboardData;
+  var pasted = clip ? clip.getData("text") : "";
+  if (pasted) {
+    e.preventDefault();
+    resetDirectTextBuffer();
+    directTextBuffer = pasted;
+    sendDirectText(directTextBuffer);
+    syncDirectInputMirror();
+    if (screenTime) screenTime.textContent = "Pasted text";
   }
 });
 
 document.addEventListener("keyup", function (e) {
-  if (document.activeElement === ti) return;
+  if (document.activeElement && (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA")) {
+    return;
+  }
+  if (e.key === "Backspace" && activeHoldKey === "BackSpace") {
+    e.preventDefault();
+    releaseUp("BackSpace");
+    return;
+  }
   var key = SPECIAL[e.key];
   if (key && activeHoldKey === key) {
     e.preventDefault();
@@ -1488,7 +1777,13 @@ window.addEventListener("blur", function () {
 
 document.getElementById("btn-send").addEventListener("click", function () {
   var t = ti.value; ti.value = ""; ti.dir = "ltr";
-  sendText(t);
+  resetDirectTextBuffer();
+  if (t) {
+    sendText(t);
+  } else {
+    sendKey("Return");
+    if (screenTime) screenTime.textContent = "Sent OK";
+  }
   if (!isTouch) {
     ti.focus();
   } else {
@@ -1499,6 +1794,17 @@ document.getElementById("btn-send").addEventListener("click", function () {
 var btnBksp = document.getElementById("btn-bksp");
 btnBksp.addEventListener("pointerdown", function (e) {
   e.preventDefault();
+  if (directTextBuffer.length > 1) {
+    directTextBuffer = directTextBuffer.slice(0, -1);
+    sendDirectText(directTextBuffer);
+    syncDirectInputMirror();
+    if (screenTime) screenTime.textContent = "Sent ⌫";
+    return;
+  }
+  if (directTextBuffer.length === 1) {
+    directTextBuffer = "";
+    syncDirectInputMirror();
+  }
   pressDown("BackSpace");
 });
 btnBksp.addEventListener("pointerup", function (e) {
@@ -1513,6 +1819,15 @@ btnBksp.addEventListener("pointercancel", function (e) {
   if (activeHoldKey === "BackSpace") releaseUp("BackSpace");
 });
 
+var btnSelectAll = document.getElementById("btn-select-all");
+if (btnSelectAll) {
+  btnSelectAll.addEventListener("click", function () {
+    resetDirectTextBuffer();
+    sendDirectKey("a", false, true);
+    if (screenTime) screenTime.textContent = "Select All (Ctrl+A)";
+  });
+}
+
 var keyButtons = document.querySelectorAll("[data-key]");
 for (var i = 0; i < keyButtons.length; i++) {
   (function (btn) {
@@ -1520,6 +1835,7 @@ for (var i = 0; i < keyButtons.length; i++) {
     if (REPEAT_KEYS[k]) {
       btn.addEventListener("pointerdown", function (e) {
         e.preventDefault();
+        resetDirectTextBuffer();
         pressDown(k);
       });
       btn.addEventListener("pointerup", function (e) {
@@ -1534,6 +1850,7 @@ for (var i = 0; i < keyButtons.length; i++) {
       });
     } else {
       btn.addEventListener("click", function () {
+        resetDirectTextBuffer();
         sendKey(k);
       });
     }
@@ -1623,6 +1940,8 @@ var btnEnterTheater = document.getElementById("btn-enter-theater");
 var btnExitTheater = document.getElementById("btn-exit-theater");
 var btnRotateScreen = document.getElementById("btn-rotate-screen");
 var btnNativeFs = document.getElementById("btn-native-fs");
+var btnTheaterInput = document.getElementById("btn-theater-input");
+var theaterInputActive = false;
 
 var btnModePointer = document.getElementById("btn-mode-pointer");
 var btnModeDpad = document.getElementById("btn-mode-dpad");
@@ -1714,6 +2033,14 @@ function setRotatedLandscape(on) {
   setTimeout(fitScreenFrame, 20);
 }
 
+function setTheaterInput(on) {
+  theaterInputActive = !!on;
+  document.body.classList.toggle("has-theater-input", theaterInputActive);
+  if (btnTheaterInput) btnTheaterInput.classList.toggle("active", theaterInputActive);
+  try { localStorage.setItem("vetro_theater_input", theaterInputActive ? "1" : "0"); } catch (e) {}
+  setTimeout(fitScreenFrame, 30);
+}
+
 function setScreenOnlyMode(on, syncHash) {
   isScreenOnly = !!on;
   document.body.classList.toggle("is-screen-only", isScreenOnly);
@@ -1726,6 +2053,16 @@ function setScreenOnlyMode(on, syncHash) {
     if (!hasScreenImage && !screenCapturing) {
       fetchScreenshot();
     }
+    var savedInput = null;
+    try { savedInput = localStorage.getItem("vetro_theater_input"); } catch (e) {}
+    if (savedInput !== null) {
+      setTheaterInput(savedInput === "1");
+    } else {
+      setTheaterInput(!!isMobile);
+    }
+  } else {
+    document.body.classList.remove("has-theater-input");
+    if (btnTheaterInput) btnTheaterInput.classList.remove("active");
   }
   if (syncHash) {
     try {
@@ -1806,6 +2143,11 @@ if (btnExitTheater) {
 if (btnRotateScreen) {
   btnRotateScreen.onclick = function () {
     setRotatedLandscape(!isRotatedLandscape);
+  };
+}
+if (btnTheaterInput) {
+  btnTheaterInput.onclick = function () {
+    setTheaterInput(!theaterInputActive);
   };
 }
 
@@ -2103,6 +2445,7 @@ if (btnScrollDown) {
 }
 if (btnPreviewBack) {
   btnPreviewBack.onclick = function () {
+    resetDirectTextBuffer();
     sendKey("XF86Back");
     screenTime.textContent = "Sent Back";
   };
@@ -2116,6 +2459,7 @@ if (screenFrame) {
   screenFrame.addEventListener("contextmenu", function (e) {
     if (!isPreviewInteractive()) return;
     e.preventDefault();
+    resetDirectTextBuffer();
     var c = getTvCoords(e.clientX, e.clientY);
     spawnRipple(c.pctX, c.pctY, true);
     if (previewMode === "dpad") {
@@ -2140,6 +2484,7 @@ if (screenFrame) {
     if (!isPreviewInteractive()) return;
     if (e.pointerType === "mouse" && e.button !== 0) return;
     e.preventDefault();
+    resetDirectTextBuffer();
     try { screenFrame.setPointerCapture(e.pointerId); } catch (err) {}
 
     ptrActive = true;

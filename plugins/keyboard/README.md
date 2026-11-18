@@ -9,7 +9,10 @@ Type text in any language from your browser into focused input fields on your Sa
 ## What it does
 
 Adds a unified **Keyboard** tab to the Vetro dashboard:
-- **Text Input:** Type into the text box and press **Enter** (or click **Send**) to inject text in any language into apps using the TV's native input fields or virtual keyboard (e.g. Samsung Internet Browser address bar, system settings, Wi-Fi passwords, and login dialogs).
+- **Text Input & Direct PC Keyboard Typing:**
+  - **Instant Physical Keyboard Typing:** On PC, any letter (lowercase or uppercase with <kbd>Shift</kbd>), digit, space, symbol, or pasted text (<kbd>Ctrl+V</kbd>) typed on your keyboard is sent directly to the TV the moment you press the key—without having to focus the input box or press Enter/Send. Non-ASCII languages (such as Arabic) automatically accumulate characters into words and phrases via direct text buffering, and Backspace seamlessly deletes the last character.
+  - **Direct Remote & Editing Shortcuts:** Press <kbd>Enter</kbd> or <kbd>Ctrl+Enter</kbd> to send an `OK` (`Return`) click, <kbd>Ctrl+A</kbd> to Select All in the focused TV input field, <kbd>Backspace</kbd> to delete on TV, <kbd>Escape</kbd> to go Back, and <kbd>Arrow keys</kbd> to navigate.
+  - **Mobile On-Screen Keyboard Support:** In fullscreen theater mode (`#screen`), mobile devices keep the input box docked at the bottom so you can tap to summon the mobile virtual keyboard, while PC hides it to maximize 100% vertical screen space (with a `⌨ Input` toolbar button to toggle on/off at will).
 - **Interactive Live Screen Preview:** Expandable full-width 1080p TV display preview with direct pointer & gesture control:
   - **Pointer Mode (`🖱 Pointer`):** Tap to click, double-tap to double-click, press & hold, press & drag (for sliders, scrollbars, and text selection), right-click, `Move only` hover mode, and scroll wheel support across the entire `1920×1080` screen (browser chrome, tabs, URL bar, web pages, and pointer-enabled apps).
   - **D-Pad Mode (`🕹 D-Pad`):** Swipe or tap directional zones directly on the preview to navigate and select items in D-Pad-only apps that ignore mouse input (such as YouTube or Netflix).
