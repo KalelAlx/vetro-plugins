@@ -12,14 +12,14 @@ Adds a unified **Keyboard** tab to the Vetro dashboard:
 - **Text Input & Direct PC Keyboard Typing:**
   - **Instant Physical Keyboard Typing:** On PC, any letter (lowercase or uppercase with <kbd>Shift</kbd>), digit, space, symbol, or pasted text (<kbd>Ctrl+V</kbd>) typed on your keyboard is sent directly to the TV the moment you press the key—without having to focus the input box or press Enter/Send. Non-ASCII languages (such as Arabic) automatically accumulate characters into words and phrases via direct text buffering, and Backspace seamlessly deletes the last character.
   - **Direct Remote & Editing Shortcuts:** Press <kbd>Enter</kbd> to send typed text (in input box) or submit focused field / URL bar (outside input box), <kbd>Ctrl+Enter</kbd> to send an `OK` (`Return`) click, <kbd>Ctrl+S</kbd> to open Search, <kbd>Ctrl+A</kbd> to Select All, <kbd>Ctrl+Z</kbd> to Undo, <kbd>Backspace</kbd> to delete on TV, <kbd>Escape</kbd> to go Back, <kbd>Home</kbd> to open TV Home, and <kbd>Arrow keys</kbd> to navigate.
-  - **Dynamic Device Pairing Name:** Automatically identifies pairing requests on your TV screen by device and browser (e.g. `Vetro (Windows Chrome)`, `Vetro (Android Chrome)`), with optional custom naming via `localStorage.setItem("vetro_client_name", "My PC")`, so you always know which device is connecting.
+  - **Dynamic Device Pairing Name:** Automatically identifies pairing requests on your TV screen by device and browser (e.g. `Vetro (Windows Chrome)`, `Vetro (Android Chrome)`) so you always know which device is connecting.
   - **Mobile On-Screen Keyboard Support:** In fullscreen theater mode (`#screen`), mobile devices keep the input box docked at the bottom so you can tap to summon the mobile virtual keyboard, while PC hides it to maximize 100% vertical screen space (with a `⌨ Input` toolbar button to toggle on/off at will).
 - **Interactive Live Screen Preview:** Expandable full-width 1080p TV display preview with direct pointer & gesture control:
   - **Pointer Mode (`🖱 Pointer`):** Tap to click, double-tap to double-click, press & hold, press & drag (for sliders, scrollbars, and text selection), right-click, `Move only` hover mode, and scroll wheel support across the entire `1920×1080` screen (browser chrome, tabs, URL bar, web pages, and pointer-enabled apps).
   - **D-Pad Mode (`🕹 D-Pad`):** Swipe or tap directional zones directly on the preview to navigate and select items in D-Pad-only apps that ignore mouse input (such as YouTube or Netflix).
 - **Navigation & D-Pad:** Full directional control (`Up`, `Down`, `Left`, `Right`, `OK`), `Home`, `Back`, `Menu`, `Info`, `Exit`.
 - **Volume & Channels:** `Volume +`, `Volume −`, `Mute`, `Channel +`, `Channel −`, `Previous Channel`, `Channel List`, `Guide`.
-- **Smooth Continuous Hold:** Press and hold arrow keys, volume, or channel buttons on your physical keyboard or screen to smoothly and continuously scroll without lag or stutter (serialized TV-side execution).
+- **Smooth Continuous Hold:** Press and hold arrow keys, volume, or channel buttons on your physical keyboard or screen to smoothly and continuously scroll without lag or stutter (native press/release with a 6 s auto-release safety timeout).
 - **System & Display:** `Power`, `TV / Source`, `Quick Menu`, `Search`, `Subtitles`, `MultiView`, `Aspect Ratio`, `Ambient mode`.
 - **Media Playback:** `Play`, `Pause`, `Play/Pause`, `Stop`, `Fast Forward`, `Rewind`, `Next`, `Previous`, `Record`.
 - **Interactive Color Keys:** Samsung remote `Red (A)`, `Green (B)`, `Yellow (C)`, `Blue (D)` buttons.
@@ -33,16 +33,18 @@ Samsung Smart TVs handle text entry in two different ways depending on the app:
 
 ## Permissions
 
-`exec` — to run `/usr/bin/input_keyevent` for remote control keys and local text input, and to capture the frame buffer via Enlightenment D-Bus.
+`exec` — to run `/usr/bin/input_keyevent` for remote control keys and local text input, `/usr/bin/enlightenment_info` for mouse actions, and `dbus-send` (Enlightenment D-Bus) to capture frame buffer screenshots.
 
 ## Commands it runs
 
 | Command | Why |
 | --- | --- |
-| `/usr/bin/input_keyevent <keysym> [down\|up]` | Injects remote-control key events (D-pad, volume, channels, playback, system keys, digits) into the focused app |
-| `sh -c 'for k in ...; do /usr/bin/input_keyevent "$k"; sleep 0.04; done'` | Injects ASCII text directly via local TV key events |
-| `/usr/bin/enlightenment_info -init_device / -mousegen / -deinit_device` | Provides native TV mouse scroll wheel events and fallback cursor movement/clicks when WebSocket is unavailable |
+| `/usr/bin/input_keyevent <keysym> [down\|up]` | Injects remote-control key taps and native press/release holds (with a 6 s auto-release safety cap) |
+| `sh -c "/usr/bin/input_keyevent Control_L\|Shift_L down; /usr/bin/input_keyevent <keysym>; /usr/bin/input_keyevent Control_L\|Shift_L up"` | Sends modified key combinations (`Ctrl+A`, `Ctrl+Z`, shifted/uppercase keys) |
+| `sh -c '/usr/bin/input_keyevent ...; sleep 0.04; ...'` | Chains mapped ASCII key events (wrapping uppercase and shifted symbols in `Shift_L down/up`) with `sleep 0.04` between characters for local text typing |
+| `sh -c '/usr/bin/enlightenment_info -init_device --node=/dev/input/event<N>; /usr/bin/enlightenment_info -mousegen ...; /usr/bin/enlightenment_info -deinit_device'` | Provides native TV scroll wheel events and fallback cursor movement, clicks (`usleep 60000` for double-clicks), and drag/hold (with 6 s auto-release timeout) when WebSocket is unavailable |
 | `dbus-send --system --print-reply --dest=org.enlightenment.wm /org/enlightenment/wm org.enlightenment.wm.info.dump_screen string:'/tmp/shot_<id>.png'` | Captures a full-resolution 1080p frame buffer snapshot from the Enlightenment window manager into a unique temporary file, deleted immediately after reading |
+| `rm -f '/tmp/shot_<id>.png'` | Fallback cleanup as root when the Vetro service runs as a non-root user and cannot unlink a root-owned screenshot file in sticky `/tmp` |
 
 ## Network
 
@@ -52,11 +54,11 @@ Samsung Smart TVs handle text entry in two different ways depending on the app:
 
 ## Data it keeps
 
-`config.json` stores `{"token":"..."}` — the Samsung Remote API pairing token saved securely TV-side to track whether the TV is paired (`paired: true/false`). The pairing token itself is never exposed over the public Vetro API or dashboard.
+`config.json` stores `{"token":"..."}` (file mode `600`) — the Samsung Remote API pairing token. `status()` and `GET api/status` only expose `paired: true/false` so the raw token does not appear in the Vetro Shard detail view. Because Vetro renders Shard pages inside a sandboxed iframe without `localStorage`, the Shard page reads the saved token on load via `GET api/token` (protected by Vetro's per-session URL token, and restricted to paired devices when Vetro pairing is on) so it can reconnect to port `8002` without re-prompting "Allow" on every visit.
 
 ## Security & Privacy Notice
 
-- **Frame Buffer Capture (`GET api/screenshot`):** Captures and returns the TV's full `1920×1080` frame buffer over the local network to anyone who can reach the Vetro HTTP port. This includes running applications, browser contents, and any visible on-screen text or typed passwords. Temporary image files (`/tmp/shot_<id>.png`) are written with per-request unique names and unlinked from the TV disk immediately after reading.
+- **Frame Buffer Capture (`GET api/screenshot`):** Captures and returns the TV's full `1920×1080` frame buffer. While Vetro pairing is **off**, anyone who can reach Vetro's HTTP port can call this route; with Vetro pairing **on**, only paired devices with an active Shard session can call it. The captured image includes running applications, browser contents, and any visible on-screen text or typed passwords. Temporary image files (`/tmp/shot_<id>.png`) are written with per-request unique names and unlinked from the TV disk immediately after reading.
 - **Local Typing Execution (`POST api/type`):** Typing via the local TV shell command is capped at 200 characters and supports partial US ASCII (letters, numbers, standard symbols). Any unsupported characters are omitted with a warning. Full Unicode text (Arabic, Hebrew, Cyrillic, CJK, emoji, etc.) is handled via the encrypted WebSocket connection on port 8002.
 
 ## Screen Preview & Display Layers

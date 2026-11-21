@@ -10,8 +10,8 @@
 //
 // Continuous Key Repeat:
 //   - WebSocket mode: uses Samsung Remote "Press" and "Release" commands.
-//   - HTTP mode: TV-side serialized hold loop (75ms) triggered by action: "down" / "up",
-//     eliminating network congestion.
+//   - HTTP mode: sends a single input_keyevent down/up pair (letting the TV handle
+//     native key repeat and cursor acceleration) with a 6 s auto-release safety cap.
 
 var fs = require('fs');
 var path = require('path');
@@ -131,7 +131,9 @@ module.exports = function (ctx) {
     var page = null;
     var activeHoldTimer = null;
     var activeHoldKey = null;
+    var activeHoldDownPromise = null;
     var mouseHeldNode = null;
+    var mouseHoldTimer = null;
 
     function findMouseNode() {
         try {
@@ -168,7 +170,24 @@ module.exports = function (ctx) {
         return cmds;
     }
 
+    function clearMouseHoldTimer() {
+        if (mouseHoldTimer) {
+            clearTimeout(mouseHoldTimer);
+            mouseHoldTimer = null;
+        }
+    }
+
+    function startMouseHoldTimer(node) {
+        clearMouseHoldTimer();
+        mouseHeldNode = node;
+        mouseHoldTimer = setTimeout(function () {
+            mouseHoldTimer = null;
+            stopMouseHold();
+        }, 6000);
+    }
+
     function stopMouseHold() {
+        clearMouseHoldTimer();
         if (mouseHeldNode) {
             var n = mouseHeldNode;
             mouseHeldNode = null;
@@ -184,34 +203,45 @@ module.exports = function (ctx) {
         }
         if (activeHoldKey) {
             var k = activeHoldKey;
+            var pendingDown = activeHoldDownPromise;
             activeHoldKey = null;
-            ctx.execute('/usr/bin/input_keyevent ' + k + ' up', 2000).catch(function () {});
+            activeHoldDownPromise = null;
+            var sendUp = function () {
+                try {
+                    ctx.execute('/usr/bin/input_keyevent ' + k + ' up', 2000).catch(function () {});
+                } catch (e) {}
+            };
+            if (pendingDown && typeof pendingDown.then === 'function') {
+                pendingDown.then(sendUp, sendUp);
+            } else {
+                sendUp();
+            }
         }
     }
 
     function startHold(key) {
         stopHold();
         activeHoldKey = key;
-        var started = Date.now();
-        ctx.execute('/usr/bin/input_keyevent ' + key + ' down', 2000).catch(function () {});
-
-        function step() {
-            if (!activeHoldKey || activeHoldKey !== key || Date.now() - started > 6000) {
-                stopHold();
-                return;
-            }
-            ctx.execute('/usr/bin/input_keyevent ' + key, 2000)
-                .then(function () {
-                    if (activeHoldKey === key && Date.now() - started <= 6000) {
-                        activeHoldTimer = setTimeout(step, 20);
-                    } else {
-                        stopHold();
-                    }
-                }, function () {
-                    stopHold();
-                });
+        var downPromise = null;
+        try {
+            downPromise = ctx.execute('/usr/bin/input_keyevent ' + key + ' down', 2000).catch(function () {});
+        } catch (e) {}
+        activeHoldDownPromise = downPromise;
+        if (downPromise && typeof downPromise.then === 'function') {
+            downPromise.then(function () {
+                if (activeHoldDownPromise === downPromise) {
+                    activeHoldDownPromise = null;
+                }
+            }, function () {
+                if (activeHoldDownPromise === downPromise) {
+                    activeHoldDownPromise = null;
+                }
+            });
         }
-        activeHoldTimer = setTimeout(step, 350);
+        activeHoldTimer = setTimeout(function () {
+            activeHoldTimer = null;
+            stopHold();
+        }, 6000);
     }
 
     function getCfg() {
@@ -252,12 +282,27 @@ module.exports = function (ctx) {
             // GET api/status
             if (sub === 'status' && req.method === 'GET') {
                 var cfg0 = getCfg();
-                res.writeHead(200, { 'content-type': 'application/json' });
+                res.writeHead(200, {
+                    'content-type': 'application/json',
+                    'cache-control': 'no-store'
+                });
                 res.end(JSON.stringify({
                     ok: true,
                     paired: !!(cfg0 && cfg0.token),
                     tvIp: getTvIp()
                 }));
+                return true;
+            }
+
+            // GET api/token — returns saved Samsung Remote pairing token to the sandboxed Shard page
+            if (sub === 'token' && req.method === 'GET') {
+                var cfgTok = getCfg();
+                var tok = (typeof cfgTok.token === 'string' && cfgTok.token.length > 0) ? cfgTok.token : null;
+                res.writeHead(200, {
+                    'content-type': 'application/json',
+                    'cache-control': 'no-store'
+                });
+                res.end(JSON.stringify({ ok: true, token: tok }));
                 return true;
             }
 
@@ -443,7 +488,7 @@ module.exports = function (ctx) {
                     } else if (action === 'down' && hasXY) {
                         cmds = cmds.concat(buildJumpCmds(x, y));
                         cmds.push('/usr/bin/enlightenment_info -mousegen --btn=0 --state=down');
-                        mouseHeldNode = node;
+                        startMouseHoldTimer(node);
                     } else if (action === 'drag') {
                         var dx = Math.max(-2000, Math.min(2000, Math.round(Number(parsed.dx) || 0)));
                         var dy = Math.max(-2000, Math.min(2000, Math.round(Number(parsed.dy) || 0)));
@@ -452,6 +497,7 @@ module.exports = function (ctx) {
                         }
                     } else if (action === 'up') {
                         cmds.push('/usr/bin/enlightenment_info -mousegen --btn=0 --state=up');
+                        clearMouseHoldTimer();
                         mouseHeldNode = null;
                     } else if (action === 'wheel') {
                         var w = Math.max(-5, Math.min(5, Math.round(Number(parsed.delta) || 0)));
@@ -484,7 +530,13 @@ module.exports = function (ctx) {
                 var shotCmd = "dbus-send --system --print-reply --dest=org.enlightenment.wm /org/enlightenment/wm org.enlightenment.wm.info.dump_screen string:'" + shotPath + "'";
 
                 function unlinkFile() {
-                    fs.unlink(shotPath, function () {});
+                    fs.unlink(shotPath, function (err) {
+                        if (err && err.code !== 'ENOENT') {
+                            try {
+                                ctx.execute("rm -f '" + shotPath + "'", 2000).catch(function () {});
+                            } catch (e) {}
+                        }
+                    });
                 }
 
                 ctx.execute(shotCmd, 10000).then(function (r) {
