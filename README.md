@@ -83,8 +83,8 @@ When a page of this repository says "plugin", it is talking about a technical na
 Through the API, a Shard cannot listen to the remote control, react to "TV turned on" or "app opened", add a launcher
 tile of its own (it can only take over an existing app's, with `intercepts`), draw anything on the TV screen but one Control center card, read or change Vetro's settings, use the MQTT / Home Assistant link, add a second page, or run while it is switched
 off. It also cannot extend Vetro's own features (Remapper, Home Assistant, Quick settings): they are not Shards and the
-host hands them nothing. The Launcher is the one feature that is a Shard (since 0.5.0), but it ships inside Vetro,
-cannot be replaced or removed, and gets private services that no catalog Shard receives.
+host hands them nothing. The Launcher (since 0.5.0) and Live TV (`tuner`, since 0.7.0) are the features that are Shards, but they
+ship inside Vetro, cannot be replaced or removed, and get private services that no catalog Shard receives.
 
 The full table, including what Vetro enforces and what it merely asks, is in
 **[what a Shard can and cannot do](docs/what-a-plugin-can-do.md)**.

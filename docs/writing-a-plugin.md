@@ -53,7 +53,7 @@ a Shard run, then change it.
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `id` | yes | Equals the folder name. 2-32 characters, `a-z 0-9 -`, starts with a letter. Not `install`, `resume`, `developer` or `launcher` (a Shard that ships inside Vetro). |
+| `id` | yes | Equals the folder name. 2-32 characters, `a-z 0-9 -`, starts with a letter. Not `install`, `resume`, `developer`, `launcher` or `tuner` (Shards that ship inside Vetro). |
 | `apiVersion` | yes | `1`. |
 | `name` | yes | Up to 40 characters. Shown in the catalog. |
 | `version` | yes | `1.2.3`. The dashboard offers an update when the catalog has a higher one. |
