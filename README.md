@@ -24,7 +24,7 @@ dashboard shows under **Vetro Shards → Load plugin catalog**, the source of ev
 A Shard can also add **one card to the launcher's Control center** (`controlCenter` in the manifest, used by `home-assistant`; needs Vetro 0.7.0): a short list of rows
 that the remote switches with OK. See [Adding a card to the Control center](docs/writing-a-plugin.md#adding-a-card-to-the-control-center).
 
-A Shard can also take over the launcher tile of an app (`intercepts` in the manifest, used by `youtube`): the dashboard says so on its card
+A Shard can also take over the launcher tile of an app (`intercepts` in the manifest, used by `youtube`; needs Vetro 0.7.0): the dashboard says so on its card
 and Vetro starts the app itself if the Shard cannot. See [Writing a Shard](docs/writing-a-plugin.md#taking-over-an-apps-launcher-tile).
 
 > **A Shard is code that runs inside Vetro on the TV, with the same access as Vetro, including running commands as
@@ -98,7 +98,8 @@ node scripts/new.cjs my-shard "My Shard"     # copies template/ to plugins/my-sh
 node scripts/build.cjs                       # checks it, packs it into dist/, updates index.json
 ```
 
-Use Node 20 for catalog tooling; Shard code remains ES5 for older TVs. Test on a TV running Vetro 0.5.0 before submitting. Then open a pull
+Use Node 20 for catalog tooling; Shard code remains ES5 for older TVs. Test on a TV running Vetro 0.5.0 or 0.7.0 before submitting (0.7.0 for
+`intercepts` and Control center cards). Then open a pull
 request with the source, `dist/` and `index.json`: CI fails if the Shard breaks a rule or if the generated files are
 out of date.
 
@@ -109,8 +110,8 @@ out of date.
 | [CONTRIBUTING.md](CONTRIBUTING.md) | what a pull request contains and what the maintainer checks |
 | [SECURITY.md](SECURITY.md) | how to report a malicious or unsafe Shard |
 
-The Shard API (called plugin API 1 in the code) is the same in Vetro 0.4.0 and 0.5.0, and is experimental. It may change. Vetro 0.7.0 adds an optional
-manifest key, `controlCenter`; older versions ignore it and load the Shard without the card.
+The Shard API (called plugin API 1 in the code) is the same in Vetro 0.4.0 and 0.5.0, and is experimental. It may change. Vetro 0.7.0 adds two optional
+manifest keys, `intercepts` and `controlCenter`; older versions ignore them and load the Shard without the tile takeover or the card.
 
 ## Repository layout
 
