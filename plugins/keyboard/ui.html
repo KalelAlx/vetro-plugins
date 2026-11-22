@@ -996,7 +996,6 @@ body.is-screen-only #only-theater-actions {
             </div>
             <div class="cert-btn-bar">
               <button type="button" id="btn-copy-cert" class="primary">📋 Copy URL</button>
-              <a id="cert-link" href="#" target="_blank" rel="noopener"><button type="button">Open ↗</button></a>
               <button type="button" id="btn-reconnect">🔄 Reconnect</button>
               <button type="button" id="btn-repair">Reset Pairing</button>
             </div>
@@ -1150,9 +1149,6 @@ var hostFromUrl = location.hostname || "";
 var isFallbackHost = !hostFromUrl || hostFromUrl === "127.0.0.1" || hostFromUrl === "localhost" || hostFromUrl === "::1" || hostFromUrl === "[::1]";
 var tvIp = hostFromUrl || "127.0.0.1";
 var tvToken = null;
-try {
-  tvToken = localStorage.getItem("tv_token") || null;
-} catch (eTok) {}
 var ws = null;
 var wsConnected = false;
 var wsConnecting = false;
@@ -1169,7 +1165,6 @@ var isMobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.
 var statusEl = document.getElementById("status");
 var ti = document.getElementById("ti");
 var certBanner = document.getElementById("cert-banner");
-var certLink = document.getElementById("cert-link");
 var certUrlInput = document.getElementById("cert-url");
 var btnCopyCert = document.getElementById("btn-copy-cert");
 var btnReconnect = document.getElementById("btn-reconnect");
@@ -1189,12 +1184,8 @@ var fullCertUrl = "https://" + tvIp + ":8002/api/v2/";
 function updateCertUrl() {
   fullCertUrl = "https://" + tvIp + ":8002/api/v2/";
   if (certUrlInput) certUrlInput.value = fullCertUrl;
-  if (certLink) certLink.href = fullCertUrl;
 }
 updateCertUrl();
-if (!isStandaloneTab && certLink) {
-  certLink.style.display = "none";
-}
 
 if (btnCopyCert) {
   btnCopyCert.onclick = function () {
@@ -1232,7 +1223,6 @@ if (btnRepair) {
   btnRepair.onclick = function () {
     authRetryCount = 0;
     tvToken = null;
-    try { localStorage.removeItem("tv_token"); } catch (eTok) {}
     fetch("savetoken", {
       method: "POST",
       headers: { "Content-Type": "text/plain" },
@@ -1324,8 +1314,6 @@ var WS_KEY_MAP = {
   "5": "KEY_5", "6": "KEY_6", "7": "KEY_7", "8": "KEY_8", "9": "KEY_9",
   "minus": "KEY_MINUS"
 };
-
-var activeHoldKey = null;
 
 function pressDown(key) {
   if (!key || activeHoldKey === key) return;
@@ -1457,7 +1445,6 @@ function initWS() {
         var t = msg.data && msg.data.token ? String(msg.data.token) : null;
         if (t && t !== tvToken) {
           tvToken = t;
-          try { localStorage.setItem("tv_token", t); } catch (eTok) {}
           fetch("savetoken", {
             method: "POST",
             headers: { "Content-Type": "text/plain" },
@@ -1471,7 +1458,6 @@ function initWS() {
         wsConnecting = false;
         wsMouseReady = false;
         tvToken = null;
-        try { localStorage.removeItem("tv_token"); } catch (eTok) {}
         fetch("savetoken", {
           method: "POST",
           headers: { "Content-Type": "text/plain" },
@@ -1595,8 +1581,11 @@ function sendText(text, submit) {
               body: JSON.stringify({ key: "Return" })
             }).catch(function () {});
           }
-          if (d.dropped && d.dropped.length > 0) {
-            setStatus("Text sent (unsupported chars omitted: " + d.dropped.join(" ") + ")", "warn");
+          var warns = [];
+          if (d.truncated) warns.push("truncated to 200 chars");
+          if (d.dropped && d.dropped.length > 0) warns.push("unsupported chars omitted: " + d.dropped.join(" "));
+          if (warns.length > 0) {
+            setStatus("Text sent (" + warns.join("; ") + ")", "warn");
           } else {
             setStatus("Text sent ✔", "ok");
           }
@@ -2491,6 +2480,7 @@ function wsSendMouseBtn(cmd) {
 }
 
 function wsJumpCursor(tx, ty) {
+  wheelLastJumpTime = 0;
   wsSendMouseMove(-2000, -2000);
   wsSendMouseMove(-2000, -2000);
   if (tx < 36 && ty < 36 && (tx > 0 || ty > 0)) {
@@ -2503,18 +2493,77 @@ function wsJumpCursor(tx, ty) {
   curTvY = ty;
 }
 
-function postMouseFallback(payload) {
-  return fetch("mouse", {
+var mouseHttpBusy = false;
+var mouseHttpQueue = [];
+var wheelTimer = null;
+var wheelLastSent = 0;
+var wheelPendingDelta = 0;
+var wheelPendingCoords = null;
+var wheelLastJumpX = -100;
+var wheelLastJumpY = -100;
+var wheelLastJumpTime = 0;
+
+function computeDeltaStep(targetX, targetY) {
+  var dxTv = targetX - curTvX;
+  var dyTv = targetY - curTvY;
+  var dist = Math.sqrt(dxTv * dxTv + dyTv * dyTv);
+  if (dist < 2) return null;
+  var scale = dist >= 40 ? 0.5 : (dist >= 14 ? 0.58 : 0.72);
+  var sx = Math.round(dxTv * scale);
+  var sy = Math.round(dyTv * scale);
+  if (sx === 0 && sy === 0) return null;
+  return { sx: sx, sy: sy, scale: scale };
+}
+
+function drainMouseHttp() {
+  if (mouseHttpBusy || mouseHttpQueue.length === 0) return;
+  var item = mouseHttpQueue.shift();
+  if (item.__target) {
+    var step = computeDeltaStep(item.__target.x, item.__target.y);
+    if (!step) {
+      drainMouseHttp();
+      return;
+    }
+    wheelLastJumpTime = 0;
+    curTvX = Math.max(0, Math.min(1919, Math.round(curTvX + step.sx / step.scale)));
+    curTvY = Math.max(0, Math.min(1079, Math.round(curTvY + step.sy / step.scale)));
+    item = { action: "drag", dx: step.sx, dy: step.sy };
+  }
+  mouseHttpBusy = true;
+  fetch("mouse", {
     method: "POST",
     headers: { "Content-Type": "text/plain" },
-    body: JSON.stringify(payload)
-  }).catch(function () {});
+    body: JSON.stringify(item)
+  }).catch(function () {}).then(function () {
+    mouseHttpBusy = false;
+    drainMouseHttp();
+  });
+}
+
+function postMouseFallback(payload) {
+  var last = mouseHttpQueue[mouseHttpQueue.length - 1];
+  if (payload && payload.action === "wheel" && last && last.action === "wheel") {
+    last.delta = Math.max(-5, Math.min(5, (last.delta || 0) + (payload.delta || 0)));
+    if (last.delta === 0) last.delta = (payload.delta < 0 ? -1 : 1);
+    if (typeof payload.x === "number" && typeof payload.y === "number") {
+      last.x = payload.x;
+      last.y = payload.y;
+    }
+  } else if (payload && ((payload.action === "move" && last && (last.action === "move" || last.__target)) ||
+      ((payload.action === "down" || payload.action === "click" || payload.action === "rightclick") && last && last.__target))) {
+    mouseHttpQueue[mouseHttpQueue.length - 1] = payload;
+  } else {
+    mouseHttpQueue.push(payload);
+  }
+  drainMouseHttp();
 }
 
 function tvMouseJumpAndAct(tx, ty, actionName) {
   if (actionName === "wheel") {
-    return postMouseFallback({ action: "wheel", x: tx, y: ty, delta: -1 });
+    tvMouseWheel(-1, { x: tx, y: ty, pctX: tx / 19.2, pctY: ty / 10.8 });
+    return;
   }
+  wheelLastJumpTime = 0;
   if (ensureWsMouse()) {
     try {
       if (actionName === "clickInPlace") {
@@ -2537,29 +2586,28 @@ function tvMouseJumpAndAct(tx, ty, actionName) {
 }
 
 function tvMouseStepDelta(targetX, targetY) {
-  var dxTv = targetX - curTvX;
-  var dyTv = targetY - curTvY;
-  var dist = Math.sqrt(dxTv * dxTv + dyTv * dyTv);
-  if (dist < 2) return;
-  var scale = dist >= 40 ? 0.5 : (dist >= 14 ? 0.58 : 0.72);
-  var sx = Math.round(dxTv * scale);
-  var sy = Math.round(dyTv * scale);
-  if (sx === 0 && sy === 0) return;
-
   if (ensureWsMouse()) {
+    var wsStep = computeDeltaStep(targetX, targetY);
+    if (!wsStep) return;
     try {
-      wsSendMouseMove(sx, sy);
-      curTvX = Math.max(0, Math.min(1919, Math.round(curTvX + sx / scale)));
-      curTvY = Math.max(0, Math.min(1079, Math.round(curTvY + sy / scale)));
+      wheelLastJumpTime = 0;
+      wsSendMouseMove(wsStep.sx, wsStep.sy);
+      curTvX = Math.max(0, Math.min(1919, Math.round(curTvX + wsStep.sx / wsStep.scale)));
+      curTvY = Math.max(0, Math.min(1079, Math.round(curTvY + wsStep.sy / wsStep.scale)));
       return;
     } catch (e) {
       wsConnected = false;
       wsMouseReady = false;
     }
   }
-  postMouseFallback({ action: "drag", dx: sx, dy: sy });
-  curTvX = targetX;
-  curTvY = targetY;
+  var last = mouseHttpQueue[mouseHttpQueue.length - 1];
+  if (last && last.__target) {
+    last.__target.x = targetX;
+    last.__target.y = targetY;
+  } else {
+    mouseHttpQueue.push({ __target: { x: targetX, y: targetY } });
+  }
+  drainMouseHttp();
 }
 
 function tvMouseRelease() {
@@ -2575,17 +2623,42 @@ function tvMouseRelease() {
   postMouseFallback({ action: "up" });
 }
 
-function tvMouseWheel(delta, coords) {
+function flushPendingWheel() {
+  wheelTimer = null;
+  if (wheelPendingDelta === 0) return;
+  var delta = Math.max(-5, Math.min(5, wheelPendingDelta));
+  var coords = wheelPendingCoords;
+  wheelPendingDelta = 0;
+  wheelPendingCoords = null;
+  wheelLastSent = Date.now();
   var payload = { action: "wheel", delta: delta };
   if (coords) {
-    payload.x = coords.x;
-    payload.y = coords.y;
+    var distSq = (coords.x - wheelLastJumpX) * (coords.x - wheelLastJumpX) +
+                 (coords.y - wheelLastJumpY) * (coords.y - wheelLastJumpY);
+    if (distSq > 144 || (wheelLastSent - wheelLastJumpTime) > 2000) {
+      payload.x = coords.x;
+      payload.y = coords.y;
+      wheelLastJumpX = coords.x;
+      wheelLastJumpY = coords.y;
+      wheelLastJumpTime = wheelLastSent;
+    }
     curTvX = coords.x;
     curTvY = coords.y;
     showCursorMarker(coords.pctX, coords.pctY, false);
   }
   postMouseFallback(payload);
   screenTime.textContent = (delta > 0 ? "Scrolled ▲" : "Scrolled ▼") + " (" + curTvX + ", " + curTvY + ")";
+}
+
+function tvMouseWheel(delta, coords) {
+  wheelPendingDelta += (delta > 0 ? 1 : -1);
+  if (coords) wheelPendingCoords = coords;
+  var elapsed = Date.now() - wheelLastSent;
+  if (elapsed >= 150 && !wheelTimer) {
+    flushPendingWheel();
+  } else if (!wheelTimer) {
+    wheelTimer = setTimeout(flushPendingWheel, Math.max(20, 150 - elapsed));
+  }
 }
 
 function setPreviewMode(mode) {
@@ -2764,9 +2837,11 @@ if (screenFrame) {
       var cur = getTvCoords(e.clientX, e.clientY);
       showCursorMarker(cur.pctX, cur.pctY, ptrIsButtonDown);
       var now = Date.now();
-      if (now - ptrLastDragSend >= 20) {
+      var useWs = ensureWsMouse();
+      if (!useWs) tvMouseStepDelta(cur.x, cur.y);
+      if (now - ptrLastDragSend >= (useWs ? 20 : 50)) {
         ptrLastDragSend = now;
-        tvMouseStepDelta(cur.x, cur.y);
+        if (useWs) tvMouseStepDelta(cur.x, cur.y);
         screenTime.textContent = (ptrIsButtonDown ? "Dragging (" : "Moving (") + cur.x + ", " + cur.y + ")…";
       }
     }

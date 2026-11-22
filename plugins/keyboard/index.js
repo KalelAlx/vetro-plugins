@@ -134,6 +134,7 @@ module.exports = function (ctx) {
     var activeHoldDownPromise = null;
     var mouseHeldNode = null;
     var mouseHoldTimer = null;
+    var mouseHoldStarted = 0;
 
     function findMouseNode() {
         try {
@@ -177,17 +178,29 @@ module.exports = function (ctx) {
         }
     }
 
-    function startMouseHoldTimer(node) {
+    function startMouseHoldTimer(node, isRefresh) {
         clearMouseHoldTimer();
+        var now = Date.now();
+        if (!isRefresh || !mouseHoldStarted) {
+            mouseHoldStarted = now;
+        }
+        var remaining = 30000 - (now - mouseHoldStarted);
+        if (remaining <= 0) {
+            stopMouseHold();
+            return;
+        }
         mouseHeldNode = node;
         mouseHoldTimer = setTimeout(function () {
             mouseHoldTimer = null;
-            stopMouseHold();
-        }, 6000);
+            try {
+                stopMouseHold();
+            } catch (e) {}
+        }, Math.min(6000, remaining));
     }
 
     function stopMouseHold() {
         clearMouseHoldTimer();
+        mouseHoldStarted = 0;
         if (mouseHeldNode) {
             var n = mouseHeldNode;
             mouseHeldNode = null;
@@ -251,6 +264,16 @@ module.exports = function (ctx) {
 
     function saveCfg(c) {
         ctx.config.set(c);
+    }
+
+    function unlinkFile(filePath) {
+        fs.unlink(filePath, function (err) {
+            if (err && err.code !== 'ENOENT') {
+                try {
+                    ctx.execute("rm -f '" + filePath + "'", 2000).catch(function () {});
+                } catch (e) {}
+            }
+        });
     }
 
     return {
@@ -407,8 +430,10 @@ module.exports = function (ctx) {
                         res.end(JSON.stringify({ ok: false, error: 'missing text' }));
                         return;
                     }
+                    var truncated = false;
                     if (text.length > 200) {
                         text = text.slice(0, 200);
+                        truncated = true;
                     }
                     var cmds = [];
                     var dropped = [];
@@ -430,7 +455,8 @@ module.exports = function (ctx) {
                         res.writeHead(200, { 'content-type': 'application/json' });
                         res.end(JSON.stringify({
                             ok: true,
-                            dropped: dropped.length > 0 ? dropped : undefined
+                            dropped: dropped.length > 0 ? dropped : undefined,
+                            truncated: truncated || undefined
                         }));
                         return;
                     }
@@ -440,6 +466,7 @@ module.exports = function (ctx) {
                         res.end(JSON.stringify({
                             ok: r.exit_code === 0,
                             dropped: dropped.length > 0 ? dropped : undefined,
+                            truncated: truncated || undefined,
                             stderr: r.stderr
                         }));
                     }, function (e) {
@@ -488,17 +515,24 @@ module.exports = function (ctx) {
                     } else if (action === 'down' && hasXY) {
                         cmds = cmds.concat(buildJumpCmds(x, y));
                         cmds.push('/usr/bin/enlightenment_info -mousegen --btn=0 --state=down');
-                        startMouseHoldTimer(node);
+                        startMouseHoldTimer(node, false);
                     } else if (action === 'drag') {
+                        if (mouseHeldNode) {
+                            startMouseHoldTimer(mouseHeldNode, true);
+                        }
                         var dx = Math.max(-2000, Math.min(2000, Math.round(Number(parsed.dx) || 0)));
                         var dy = Math.max(-2000, Math.min(2000, Math.round(Number(parsed.dy) || 0)));
-                        if (dx !== 0 || dy !== 0) {
-                            cmds.push('/usr/bin/enlightenment_info -mousegen --axis=' + dx + ',' + dy + ' --state=move');
+                        if (dx === 0 && dy === 0) {
+                            res.writeHead(200, { 'content-type': 'application/json' });
+                            res.end(JSON.stringify({ ok: true }));
+                            return;
                         }
+                        cmds.push('/usr/bin/enlightenment_info -mousegen --axis=' + dx + ',' + dy + ' --state=move');
                     } else if (action === 'up') {
                         cmds.push('/usr/bin/enlightenment_info -mousegen --btn=0 --state=up');
                         clearMouseHoldTimer();
                         mouseHeldNode = null;
+                        mouseHoldStarted = 0;
                     } else if (action === 'wheel') {
                         var w = Math.max(-5, Math.min(5, Math.round(Number(parsed.delta) || 0)));
                         if (w === 0) w = -1;
@@ -529,25 +563,15 @@ module.exports = function (ctx) {
                 var shotPath = '/tmp/shot_' + shotId + '.png';
                 var shotCmd = "dbus-send --system --print-reply --dest=org.enlightenment.wm /org/enlightenment/wm org.enlightenment.wm.info.dump_screen string:'" + shotPath + "'";
 
-                function unlinkFile() {
-                    fs.unlink(shotPath, function (err) {
-                        if (err && err.code !== 'ENOENT') {
-                            try {
-                                ctx.execute("rm -f '" + shotPath + "'", 2000).catch(function () {});
-                            } catch (e) {}
-                        }
-                    });
-                }
-
                 ctx.execute(shotCmd, 10000).then(function (r) {
                     if (r.exit_code !== 0) {
-                        unlinkFile();
+                        unlinkFile(shotPath);
                         res.writeHead(500, { 'content-type': 'application/json' });
                         res.end(JSON.stringify({ ok: false, error: r.stderr || 'Screenshot capture failed' }));
                         return;
                     }
                     fs.readFile(shotPath, function (err, data) {
-                        unlinkFile();
+                        unlinkFile(shotPath);
                         if (err) {
                             res.writeHead(500, { 'content-type': 'application/json' });
                             res.end(JSON.stringify({ ok: false, error: err.message }));
@@ -561,7 +585,7 @@ module.exports = function (ctx) {
                         res.end(data);
                     });
                 }, function (e) {
-                    unlinkFile();
+                    unlinkFile(shotPath);
                     res.writeHead(500, { 'content-type': 'application/json' });
                     res.end(JSON.stringify({ ok: false, error: e.message }));
                 });
