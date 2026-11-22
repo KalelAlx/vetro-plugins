@@ -136,6 +136,8 @@ module.exports = function (ctx) {
     var mouseHeldNode = null;
     var mouseHoldTimer = null;
     var mouseHoldStarted = 0;
+    var mouseInitNode = null;
+    var mouseInitTimer = null;
 
     function findMouseNode() {
         try {
@@ -158,16 +160,27 @@ module.exports = function (ctx) {
         }
     }
 
+    function dbusWm(method, args, reply) {
+        return 'dbus-send --system ' + (reply ? '--print-reply' : '--type=method_call') +
+            ' --dest=org.enlightenment.wm /org/enlightenment/wm org.enlightenment.wm.info.' +
+            method + (args ? (' ' + args) : '');
+    }
+
+    function dbusMouse(btn, dx, dy, state, reply) {
+        return dbusWm('mousegen', 'int32:' + btn + ' int32:' + dx + ' int32:' + dy + ' int32:' + state, reply);
+    }
+
+    function runShell(cmds) {
+        if (cmds.length === 1) return cmds[0];
+        return "sh -c '" + cmds.slice(0, -1).join(' >/dev/null 2>&1; ') + ' >/dev/null 2>&1; ' + cmds[cmds.length - 1] + "'";
+    }
+
     function buildJumpCmds(x, y) {
-        var cmds = [
-            '/usr/bin/enlightenment_info -mousegen --axis=-2000,-2000',
-            '/usr/bin/enlightenment_info -mousegen --axis=-2000,-2000'
-        ];
+        var cmds = [dbusMouse(0, -2000, -2000, 2), dbusMouse(0, -2000, -2000, 2)];
         if (x < 36 && y < 36 && (x > 0 || y > 0)) {
-            cmds.push('/usr/bin/enlightenment_info -mousegen --axis=100,100');
-            cmds.push('/usr/bin/enlightenment_info -mousegen --axis=' + Math.round((x - 200) / 2) + ',' + Math.round((y - 200) / 2));
+            cmds.push(dbusMouse(0, 100, 100, 2), dbusMouse(0, Math.round((x - 200) / 2), Math.round((y - 200) / 2), 2));
         } else if (x > 0 || y > 0) {
-            cmds.push('/usr/bin/enlightenment_info -mousegen --axis=' + Math.round(x / 2) + ',' + Math.round(y / 2));
+            cmds.push(dbusMouse(0, Math.round(x / 2), Math.round(y / 2), 2));
         }
         return cmds;
     }
@@ -187,27 +200,53 @@ module.exports = function (ctx) {
         }
         var remaining = 30000 - (now - mouseHoldStarted);
         if (remaining <= 0) {
-            stopMouseHold();
+            stopMouseHold(false);
             return;
         }
         mouseHeldNode = node;
         mouseHoldTimer = setTimeout(function () {
             mouseHoldTimer = null;
             try {
-                stopMouseHold();
+                stopMouseHold(false);
             } catch (e) {}
         }, Math.min(6000, remaining));
     }
 
-    function stopMouseHold() {
+    function stopMouseHold(alsoDeinit) {
         clearMouseHoldTimer();
         mouseHoldStarted = 0;
-        if (mouseHeldNode) {
-            var n = mouseHeldNode;
-            mouseHeldNode = null;
-            var relCmd = "sh -c '/usr/bin/enlightenment_info -init_device --node=" + n + " >/dev/null 2>&1; /usr/bin/enlightenment_info -mousegen --btn=0 --state=up >/dev/null 2>&1; /usr/bin/enlightenment_info -deinit_device >/dev/null 2>&1'";
-            ctx.execute(relCmd, 2000).catch(function () {});
+        if (alsoDeinit && mouseInitTimer) {
+            clearTimeout(mouseInitTimer);
+            mouseInitTimer = null;
         }
+        var cmds = [];
+        if (mouseHeldNode) {
+            cmds.push(dbusWm('init_device', 'uint32:0 string:' + mouseHeldNode, true), dbusMouse(0, -1, -1, 0));
+            mouseHeldNode = null;
+        }
+        if (alsoDeinit && (mouseInitNode || cmds.length > 0)) {
+            mouseInitNode = null;
+            cmds.push(dbusWm('deinit_device'));
+        }
+        if (cmds.length > 0) {
+            try {
+                ctx.execute(runShell(cmds), 2000).catch(function () {});
+            } catch (e) {}
+        }
+    }
+
+    function touchMouseInit(node) {
+        mouseInitNode = node;
+        if (mouseInitTimer) clearTimeout(mouseInitTimer);
+        mouseInitTimer = setTimeout(function () {
+            mouseInitTimer = null;
+            if (mouseInitNode && !mouseHeldNode) {
+                mouseInitNode = null;
+                try {
+                    ctx.execute(dbusWm('deinit_device'), 2000).catch(function () {});
+                } catch (e) {}
+            }
+        }, 8000);
     }
 
     function stopHold() {
@@ -674,7 +713,7 @@ module.exports = function (ctx) {
 
         stop: function () {
             stopHold();
-            stopMouseHold();
+            stopMouseHold(true);
             closeAllStreamClients();
             stopStreamPipeline();
             clearScreenshotWaiters();
@@ -871,7 +910,7 @@ module.exports = function (ctx) {
                 return true;
             }
 
-            // POST api/mouse — fallback cursor jump/click/drag and scroll wheel via enlightenment_info
+            // POST api/mouse — fast fallback cursor jump/click/drag and scroll wheel via Enlightenment D-Bus
             if (sub === 'mouse' && req.method === 'POST') {
                 readJson(req, 4096, function (err, parsed) {
                     if (err) {
@@ -889,31 +928,27 @@ module.exports = function (ctx) {
                     var hasXY = (typeof parsed.x === 'number' && typeof parsed.y === 'number' && isFinite(parsed.x) && isFinite(parsed.y));
                     var x = hasXY ? Math.max(0, Math.min(1919, Math.round(parsed.x))) : 0;
                     var y = hasXY ? Math.max(0, Math.min(1079, Math.round(parsed.y))) : 0;
-                    var cmds = ['/usr/bin/enlightenment_info -init_device --node=' + node];
+                    var actionCmds = [];
 
                     if (action === 'move' && hasXY) {
-                        cmds = cmds.concat(buildJumpCmds(x, y));
+                        actionCmds = buildJumpCmds(x, y);
+                        actionCmds[actionCmds.length - 1] = actionCmds[actionCmds.length - 1].replace('--type=method_call', '--print-reply');
                     } else if (action === 'click' && hasXY) {
-                        cmds = cmds.concat(buildJumpCmds(x, y));
-                        cmds.push('/usr/bin/enlightenment_info -mousegen --btn=0');
+                        actionCmds = buildJumpCmds(x, y);
+                        actionCmds.push(dbusMouse(0, -1, -1, 3, true));
                     } else if (action === 'clickInPlace') {
-                        cmds.push('/usr/bin/enlightenment_info -mousegen --btn=0');
+                        actionCmds = [dbusMouse(0, -1, -1, 3, true)];
                     } else if (action === 'dblclick' && hasXY) {
-                        cmds = cmds.concat(buildJumpCmds(x, y));
-                        cmds.push('/usr/bin/enlightenment_info -mousegen --btn=0');
-                        cmds.push('usleep 60000');
-                        cmds.push('/usr/bin/enlightenment_info -mousegen --btn=0');
+                        actionCmds = buildJumpCmds(x, y);
+                        actionCmds.push(dbusMouse(0, -1, -1, 3), 'usleep 60000', dbusMouse(0, -1, -1, 3, true));
                     } else if (action === 'rightclick' && hasXY) {
-                        cmds = cmds.concat(buildJumpCmds(x, y));
-                        cmds.push('/usr/bin/enlightenment_info -mousegen --btn=1');
+                        actionCmds = buildJumpCmds(x, y);
+                        actionCmds.push(dbusMouse(1, -1, -1, 3, true));
                     } else if (action === 'down' && hasXY) {
-                        cmds = cmds.concat(buildJumpCmds(x, y));
-                        cmds.push('/usr/bin/enlightenment_info -mousegen --btn=0 --state=down');
+                        actionCmds = buildJumpCmds(x, y);
+                        actionCmds.push(dbusMouse(0, -1, -1, 1, true));
                         startMouseHoldTimer(node, false);
                     } else if (action === 'drag') {
-                        if (mouseHeldNode) {
-                            startMouseHoldTimer(mouseHeldNode, true);
-                        }
                         var dx = Math.max(-2000, Math.min(2000, Math.round(Number(parsed.dx) || 0)));
                         var dy = Math.max(-2000, Math.min(2000, Math.round(Number(parsed.dy) || 0)));
                         if (dx === 0 && dy === 0) {
@@ -921,32 +956,50 @@ module.exports = function (ctx) {
                             res.end(JSON.stringify({ ok: true }));
                             return;
                         }
-                        cmds.push('/usr/bin/enlightenment_info -mousegen --axis=' + dx + ',' + dy + ' --state=move');
+                        if (mouseHeldNode) {
+                            startMouseHoldTimer(mouseHeldNode, true);
+                        }
+                        actionCmds = [dbusMouse(0, dx, dy, 2, true)];
                     } else if (action === 'up') {
-                        cmds.push('/usr/bin/enlightenment_info -mousegen --btn=0 --state=up');
+                        actionCmds = [dbusMouse(0, -1, -1, 0, true)];
                         clearMouseHoldTimer();
                         mouseHeldNode = null;
                         mouseHoldStarted = 0;
                     } else if (action === 'wheel') {
                         var w = Math.max(-5, Math.min(5, Math.round(Number(parsed.delta) || 0)));
                         if (w === 0) w = -1;
-                        if (hasXY) cmds = cmds.concat(buildJumpCmds(x, y));
-                        cmds.push('/usr/bin/enlightenment_info -mousegen --wheel=' + w);
+                        if (hasXY) actionCmds = buildJumpCmds(x, y);
+                        actionCmds.push(dbusMouse(3, w, -1, 2, true));
                     } else {
                         res.writeHead(400, { 'content-type': 'application/json' });
                         res.end(JSON.stringify({ ok: false, error: 'invalid mouse action' }));
                         return;
                     }
 
-                    cmds.push('/usr/bin/enlightenment_info -deinit_device');
-                    var shCmd = "sh -c '" + cmds.join(' >/dev/null 2>&1; ') + " >/dev/null 2>&1'";
-                    ctx.execute(shCmd, 5000).then(function (r) {
+                    var initCmd = dbusWm('init_device', 'uint32:0 string:' + node, true);
+                    var needInit = (mouseInitNode !== node);
+                    var runList = needInit ? [initCmd].concat(actionCmds) : actionCmds;
+                    touchMouseInit(node);
+                    function onOk(r) {
+                        if (!r || r.exit_code !== 0) {
+                            mouseInitNode = null;
+                        }
                         res.writeHead(200, { 'content-type': 'application/json' });
-                        res.end(JSON.stringify({ ok: r.exit_code === 0, stderr: r.stderr }));
-                    }, function (e) {
+                        res.end(JSON.stringify({ ok: !!(r && r.exit_code === 0), stderr: r && r.stderr }));
+                    }
+                    function onErr(e) {
+                        mouseInitNode = null;
                         res.writeHead(200, { 'content-type': 'application/json' });
                         res.end(JSON.stringify({ ok: false, error: e.message }));
-                    });
+                    }
+                    ctx.execute(runShell(runList), 5000).then(function (r) {
+                        if (!needInit && r && typeof r.stdout === 'string' && r.stdout.indexOf('Initialize device first') !== -1) {
+                            touchMouseInit(node);
+                            ctx.execute(runShell([initCmd].concat(actionCmds)), 5000).then(onOk, onErr);
+                            return;
+                        }
+                        onOk(r);
+                    }, onErr);
                 });
                 return true;
             }

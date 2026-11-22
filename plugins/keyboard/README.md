@@ -33,7 +33,7 @@ Samsung Smart TVs handle text entry in two different ways depending on the app:
 
 ## Permissions
 
-`exec` — to run `/usr/bin/input_keyevent` for remote control keys and local text input, `/usr/bin/enlightenment_info` for mouse actions, `gst-launch-1.0` for Wayland live MJPEG stream and JPEG screenshot capture, `dbus-send` (Enlightenment D-Bus) for fallback screenshot capture, and `kill`/`rm` cleanup.
+`exec` — to run `/usr/bin/input_keyevent` for remote control keys and local text input, `dbus-send` (`org.enlightenment.wm.info` for fast mouse actions and fallback screenshots), `gst-launch-1.0` for Wayland live MJPEG stream and JPEG screenshot capture, and `kill`/`rm` cleanup.
 
 ## Commands it runs
 
@@ -42,7 +42,7 @@ Samsung Smart TVs handle text entry in two different ways depending on the app:
 | `/usr/bin/input_keyevent <keysym> [down\|up]` | Injects remote-control key taps and native press/release holds (with a 6 s auto-release safety cap) |
 | `sh -c "/usr/bin/input_keyevent Control_L\|Shift_L down; /usr/bin/input_keyevent <keysym>; /usr/bin/input_keyevent Control_L\|Shift_L up"` | Sends modified key combinations (`Ctrl+A`, `Ctrl+Z`, shifted/uppercase keys) |
 | `sh -c '/usr/bin/input_keyevent ...; sleep 0.04; ...'` | Chains mapped ASCII key events (wrapping uppercase and shifted symbols in `Shift_L down/up`) with `sleep 0.04` between characters for local text typing |
-| `sh -c '/usr/bin/enlightenment_info -init_device --node=/dev/input/event<N>; /usr/bin/enlightenment_info -mousegen ...; /usr/bin/enlightenment_info -deinit_device'` | Provides native TV scroll wheel events and fallback cursor movement, clicks (`usleep 60000` for double-clicks), and drag/hold (with 6 s inactivity / 30 s max auto-release timeout) when WebSocket is unavailable |
+| `dbus-send --system ... /org/enlightenment/wm org.enlightenment.wm.info.{init_device,mousegen,deinit_device}` | Provides native TV scroll wheel events and fast fallback cursor movement, clicks (`usleep 60000` for double-clicks via `sh -c`), and drag/hold (with 8 s idle auto-deinit and 6 s inactivity / 30 s max auto-release timeout) when WebSocket is unavailable |
 | `WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run gst-launch-1.0 -q waylandsrc ! video/x-raw,width=1920,height=1080 ! videoscale method=0 n-threads=2 ! video/x-raw,width=960,height=540 ! videoconvert n-threads=2 ! jpegenc quality=55 idct-method=1 ! tcpserversink host=127.0.0.1 port=18888 sync=false ... & echo $! > /tmp/vetro-keyboard-stream.pid` | Streams in-memory Wayland MJPEG frames over localhost loopback while live preview is open (automatic polling fallback if unavailable) |
 | `if [ -f /tmp/vetro-keyboard-stream.pid ]; then ... grep -q 'tcpserversink.*18888' && kill / kill -9 "$pid"; rm -f /tmp/vetro-keyboard-stream.pid; fi` | Stops only the tracked Wayland streaming pipeline (verified by `/proc/<pid>/cmdline`) once no viewers remain connected or when the Shard stops |
 | `WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run gst-launch-1.0 -q waylandsrc num-buffers=1 ... filesink location='/tmp/shot_<id>.jpg'` | Captures a fast single-shot `1920×1080` JPEG frame from the Wayland compositor into a unique temporary file, deleted immediately after reading |
