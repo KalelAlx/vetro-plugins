@@ -1,0 +1,253 @@
+[
+ {
+  "group": "Color",
+  "key": "Hdr",
+  "label": "HDR decoding",
+  "default": "auto",
+  "options": {
+   "auto": "Follow TV",
+   "on": "Force HDR10",
+   "off": "Force SDR"
+  },
+  "hint": "Applies to full-picture capture. The fallback already supplies RGB."
+ },
+ {
+  "group": "Color",
+  "key": "Saturation",
+  "label": "Saturation",
+  "default": 100,
+  "min": 0,
+  "max": 200,
+  "unit": "%"
+ },
+ {
+  "group": "Color",
+  "key": "Brightness",
+  "label": "LED brightness",
+  "default": 100,
+  "min": 0,
+  "max": 100,
+  "unit": "%"
+ },
+ {
+  "group": "Color",
+  "key": "Gamma",
+  "label": "Output gamma",
+  "default": 100,
+  "min": 50,
+  "max": 250,
+  "unit": "\u00d7100",
+  "hint": "100 is neutral. Higher values darken midtones."
+ },
+ {
+  "group": "Color",
+  "key": "Reference",
+  "label": "HDR reference white",
+  "default": 203,
+  "min": 100,
+  "max": 1000,
+  "unit": "nits",
+  "hint": "Higher values preserve more highlight detail."
+ },
+ {
+  "group": "Color",
+  "key": "Black",
+  "label": "Black cutoff",
+  "default": 0,
+  "min": 0,
+  "max": 40,
+  "unit": "/255",
+  "hint": "Switch a zone off when all three channels are at or below this level."
+ },
+ {
+  "group": "White balance",
+  "key": "Red",
+  "label": "Red gain",
+  "default": 100,
+  "min": 0,
+  "max": 150,
+  "unit": "%"
+ },
+ {
+  "group": "White balance",
+  "key": "Green",
+  "label": "Green gain",
+  "default": 100,
+  "min": 0,
+  "max": 150,
+  "unit": "%"
+ },
+ {
+  "group": "White balance",
+  "key": "Blue",
+  "label": "Blue gain",
+  "default": 100,
+  "min": 0,
+  "max": 150,
+  "unit": "%"
+ },
+ {
+  "group": "Motion",
+  "key": "Smooth",
+  "label": "Smoothing time",
+  "default": 125,
+  "min": 0,
+  "max": 500,
+  "unit": "ms"
+ },
+ {
+  "group": "Motion",
+  "key": "CaptureHz",
+  "label": "Full-picture capture target",
+  "default": 60,
+  "min": 5,
+  "max": 60,
+  "unit": "FPS"
+ },
+ {
+  "group": "Motion",
+  "key": "SendHz",
+  "label": "WLED stream target",
+  "default": 62,
+  "min": 5,
+  "max": 62,
+  "unit": "FPS",
+  "hint": "Controls the TV sender. Actual strip refresh depends on WLED."
+ },
+ {
+  "group": "Sampling",
+  "key": "Source",
+  "label": "Capture mode",
+  "default": "auto",
+  "options": {
+   "auto": "Full picture with fallback",
+   "sampler": "TV color sampler only"
+  }
+ },
+ {
+  "group": "Sampling",
+  "key": "Fallback",
+  "label": "Fallback zones",
+  "default": 16,
+  "choices": [
+   4,
+   8,
+   16
+  ],
+  "hint": "Fewer zones refresh each sampled position more often."
+ },
+ {
+  "group": "Sampling",
+  "key": "Bars",
+  "label": "Black-bar detection",
+  "default": "both",
+  "options": {
+   "both": "All borders",
+   "rows": "Top and bottom",
+   "columns": "Left and right",
+   "off": "Off"
+  }
+ },
+ {
+  "group": "Sampling",
+  "key": "SampleMode",
+  "label": "Zone color sampling",
+  "default": "average",
+  "options": {
+   "edge": "Outer edge",
+   "average": "Four-point average",
+   "median": "Median",
+   "inner": "Inner edge",
+   "weighted": "Edge-weighted",
+   "whole": "Whole-strip average"
+  },
+  "hint": "Outer edge samples the border. Four-point average blends four inward points. Median rejects one-off extremes. Inner edge samples farthest inward. Edge-weighted favors the border. Whole-strip average blends all sampled perimeter zones into one color."
+ },
+ {
+  "group": "Sampling",
+  "key": "Depth",
+  "label": "Edge sampling depth",
+  "default": 16,
+  "min": 4,
+  "max": 48,
+  "unit": "px",
+  "hint": "Four samples per LED, spread inward from the picture edge."
+ },
+ {
+  "group": "WLED target",
+  "key": "Wled",
+  "label": "WLED address",
+  "default": "127.0.0.1",
+  "type": "ipv4",
+  "hint": "Enter the WLED controller IPv4 address."
+ },
+ {
+  "group": "WLED target",
+  "key": "Offset",
+  "label": "LED start offset",
+  "default": 0,
+  "min": 0,
+  "max": 537,
+  "unit": "LEDs"
+ },
+ {
+  "group": "WLED target",
+  "key": "Direction",
+  "label": "Strip order",
+  "default": "normal",
+  "options": {
+   "normal": "Clockwise",
+   "reverse": "Counterclockwise"
+  }
+ },
+ {
+  "group": "WLED target",
+  "key": "Leds",
+  "label": "LEDs on controller",
+  "default": 538,
+  "min": 1,
+  "max": 538,
+  "unit": "LEDs",
+  "hidden": true
+ },
+ {
+  "group": "Sampling",
+  "key": "ZonesMode",
+  "label": "Full-picture zone count",
+  "default": "match",
+  "options": {
+   "match": "Match WLED LEDs",
+   "custom": "Choose custom count"
+  },
+  "hint": "Match uses the configured WLED LED count."
+ },
+ {
+  "group": "Sampling",
+  "key": "Zones",
+  "label": "Custom full-picture zones",
+  "default": 512,
+  "choices": [
+   4,
+   8,
+   16,
+   32,
+   64,
+   128,
+   256,
+   512
+  ],
+  "hint": "Used when full-picture zone count is set to custom."
+ },
+ {
+  "group": "WLED target",
+  "key": "StartCorner",
+  "label": "Strip start corner",
+  "default": "bottom-left",
+  "options": {
+   "top-left": "Top left",
+   "top-right": "Top right",
+   "bottom-right": "Bottom right",
+   "bottom-left": "Bottom left"
+  }
+ }
+]

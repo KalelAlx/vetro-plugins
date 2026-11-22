@@ -143,6 +143,19 @@
       "size": 2885
     },
     {
+      "id": "wled-screen-sync",
+      "name": "WLED Screen Sync",
+      "version": "0.1.0",
+      "author": "KalelAlx",
+      "description": "Syncs TV picture colors to one configured WLED controller over DDP.",
+      "permissions": [
+        "exec"
+      ],
+      "url": "dist/wled-screen-sync-0.1.0.vplugin",
+      "sha256": "a0e102785b9a4360417b4a6d922eaf20504038999f96ee9b74e556aca2a8aa12",
+      "size": 142930
+    },
+    {
       "id": "youtube",
       "name": "Ad-free YouTube",
       "version": "0.4.1",
