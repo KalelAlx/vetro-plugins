@@ -1790,6 +1790,17 @@ function sendSubmit() {
     .catch(function () { setStatus("Network error", "err"); });
 }
 
+function isTextInputFocused() {
+  var el = document.activeElement;
+  if (!el) return false;
+  if (el.tagName === "TEXTAREA") return true;
+  if (el.tagName === "INPUT") {
+    var t = (el.type || "text").toLowerCase();
+    return !el.readOnly && (t === "text" || t === "search" || t === "url" || t === "tel" || t === "email" || t === "password" || t === "number");
+  }
+  return false;
+}
+
 document.addEventListener("keydown", function (e) {
   // Always handle Ctrl+Enter / Cmd+Enter as OK click everywhere
   if ((e.key === "Enter" || e.keyCode === 13) && (e.ctrlKey || e.metaKey)) {
@@ -1801,7 +1812,7 @@ document.addEventListener("keydown", function (e) {
   }
 
   // If focus is inside an input or textarea, let native input handling proceed
-  if (document.activeElement && (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA")) {
+  if (isTextInputFocused()) {
     return;
   }
 
@@ -1926,7 +1937,7 @@ document.addEventListener("keydown", function (e) {
 });
 
 document.addEventListener("paste", function (e) {
-  if (document.activeElement && (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA")) {
+  if (isTextInputFocused()) {
     return;
   }
   var clip = e.clipboardData || window.clipboardData;
@@ -1942,7 +1953,7 @@ document.addEventListener("paste", function (e) {
 });
 
 document.addEventListener("keyup", function (e) {
-  if (document.activeElement && (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA")) {
+  if (isTextInputFocused()) {
     return;
   }
   if (e.key === "Backspace" && activeHoldKey === "BackSpace") {
@@ -3126,6 +3137,12 @@ if (btnToggleScreen && boxScreen) {
   }
 }
 
+if (chkHoverOnly) {
+  chkHoverOnly.onchange = function () {
+    chkHoverOnly.blur();
+  };
+}
+
 if (chkAutoRefresh) {
   chkAutoRefresh.onchange = function () {
     if (chkAutoRefresh.checked) {
@@ -3133,6 +3150,7 @@ if (chkAutoRefresh) {
     } else {
       stopLiveStream(true);
     }
+    chkAutoRefresh.blur();
   };
 }
 
