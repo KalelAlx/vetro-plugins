@@ -5,10 +5,11 @@
 :root{color-scheme:dark;font-family:Inter,system-ui,sans-serif;background:#101017;color:#f5f2fb}
 *{box-sizing:border-box}body{margin:0}main{max-width:1000px;margin:auto;padding:clamp(18px,4vw,42px)}
 header{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}
+.header{position:sticky;top:0;z-index:30;background:#101017;padding:12px 0}.header-actions{display:flex;align-items:center;gap:10px}.view-switch{display:flex;align-items:center;gap:7px}.view-switch select{min-width:105px}
 h1{font-size:clamp(32px,5vw,54px);letter-spacing:-.055em;margin:0}h2{font-size:1.05rem;margin:0 0 10px}
 section,details{background:#1a1924;border:1px solid #383443;border-radius:16px;padding:20px;margin:14px 0}
 .capture{background:linear-gradient(125deg,#29203c,#1c1c2b);padding:24px}
-.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:20px 0}.metrics strong{font:600 1.6rem system-ui;display:block}
+.metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin:20px 0}.metrics strong{font:600 1.6rem system-ui;display:block}
 canvas{width:100%;height:38px;background:#100f17;border-radius:8px;display:block;margin:10px 0}
 .row{display:grid;grid-template-columns:minmax(140px,1fr) minmax(170px,1fr);gap:12px 26px;align-items:center;padding:14px 0}.row+.row{border-top:1px solid #35303f}
 label,summary{font-weight:600}summary{cursor:pointer}small,.unit,#status{color:#c0b7cf;line-height:1.45}small{display:block;margin-top:4px}
@@ -19,14 +20,15 @@ button.primary,nav button[aria-pressed=true]{background:#d5bcff;color:#21132e;bo
 button:disabled{opacity:.5;cursor:default}footer{position:sticky;bottom:0;background:#101017f5;padding:14px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere}
 @media(max-width:620px){.row{grid-template-columns:1fr}section{padding:15px}.metrics strong{font-size:1.2rem}}
 .row{padding:18px 0}.inputs:has(input[type=range]){display:grid;grid-template-columns:minmax(0,1fr) 5em auto;gap:10px}.inputs input[type=range]{width:100%;min-width:0;padding:0;margin:0;border:0}.inputs input[type=number]{width:100%}nav{margin:16px 0;gap:10px}footer{margin-top:18px}#view{margin:8px 12px}input[type=checkbox]{width:22px;height:22px;accent-color:#bc9aff}
+.mode-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.mode-card{border:1px solid #454052;border-radius:12px;padding:12px;background:#211f2c;cursor:pointer}.mode-card strong,.mode-card small{display:block}.mode-card small{margin-top:5px}.mode-card.selected{border-color:#bc9aff;background:#33264a}.mode-card.selected strong{color:#e7d8ff}@media(max-width:620px){.mode-cards{grid-template-columns:1fr 1fr}}
 </style>
-<main><header><h1>Ambilight Studio</h1><p id="status" role="status">Connecting…</p></header>
+<main><header class="header"><h1>Ambilight Studio</h1><div class="header-actions"><p id="status" role="status">Connecting…</p><label class="view-switch">View <select id="view"><option value="simple">Simple</option><option value="advanced">Advanced</option></select></label></div></header>
 <section class="capture"><h2>Strip output</h2><canvas id="strip" width="768" height="38" aria-label="48 color samples in physical strip order"></canvas>
 <small id="previewState">Waiting for output…</small>
-<div class="metrics"><div><small>Active zones</small><strong id="zones">—</strong></div><div><small>Scans / sec</small><strong id="fps">—</strong></div><div><small>Changes / sec</small><strong id="changes">—</strong></div></div>
+<div class="metrics"><div><small>Active zones</small><strong id="zones">—</strong></div><div><small>Scans / sec</small><strong id="fps">—</strong></div><div><small>Changes / sec</small><strong id="changes">—</strong></div><div><small>Audio level</small><strong id="audioLevel">—</strong></div><div><small>Audio received</small><strong id="audioBytes">—</strong></div></div>
 <div class="actions"><button type="button" data-action="start">Start</button><button type="button" data-action="stop">Stop</button><button type="button" data-action="restart">Restart capture</button><span id="captureMsg" role="status"></span></div></section>
 <details id="diagnosticsPanel" hidden><summary>Capture diagnostics</summary><pre id="diagnostics">Waiting for capture…</pre></details>
-<label>Settings view <select id="view"><option value="simple">Simple</option><option value="advanced">Advanced</option></select></label><nav id="tabs" aria-label="Settings groups"></nav>
+<nav id="tabs" aria-label="Settings groups"></nav>
 <form id="form"><div id="groups"></div>
 <footer><button type="button" class="primary" id="apply" disabled>Apply settings</button><button type="button" id="defaults" disabled>Restore defaults</button><span role="status" id="msg"></span></footer></form></main>
 <script>
@@ -35,12 +37,26 @@ var fields=[], saved={}, inputs={}, pending=false;
 var el=function(id){return document.getElementById(id)};
 function request(url,opts){return fetch(url,opts).then(function(r){return r.json().then(function(d){if(!r.ok)throw Error(d.error||'Request failed');return d;});});}
 function node(tag,parent,txt){var n=document.createElement(tag);parent.appendChild(n);if(txt!==undefined)n.textContent=txt;return n;}
-function values(){var d={};fields.forEach(function(f){d[f.key]=f.type==='toggle'?inputs[f.key].main.checked:f.options||f.type==='color'||f.type==='ipv4'?inputs[f.key].main.value:Number(inputs[f.key].main.value);});return d;}
+function values(){var d={};fields.forEach(function(f){if(f.key==='UiView')d[f.key]=el('view').value;else d[f.key]=f.type==='toggle'?inputs[f.key].main.checked:f.options||f.type==='color'||f.type==='ipv4'?inputs[f.key].main.value:Number(inputs[f.key].main.value);});return d;}
 function change(){var v=values();var dirty=fields.some(function(f){return saved[f.key]!==v[f.key];});el('apply').disabled=!dirty||pending;el('msg').textContent=dirty?'Unsaved changes':'';}
-function fill(d){fields.forEach(function(f){var i=inputs[f.key];if(f.type==='toggle')i.main.checked=d[f.key];else i.main.value=d[f.key];if(i.range)i.range.value=d[f.key];});change();}
+function fill(d){el('view').value=d.UiView||'simple';fields.forEach(function(f){if(f.key==='UiView'||!inputs[f.key]||!inputs[f.key].main)return;var i=inputs[f.key];if(f.type==='toggle')i.main.checked=d[f.key];else i.main.value=d[f.key];if(i.range)i.range.value=d[f.key];});change();setView();}
+function setView(){
+ var simple=(saved.UiView||el('view').value||'simple')==='simple';
+ var basic=['Lighting','Wled','Brightness','Smooth','AudioReaction','AudioSensitivity','AudioBlend','AudioSampling','UiView'];
+ el('diagnosticsPanel').hidden=simple;
+ el('tabs').style.display=simple?'none':'';
+ fields.forEach(function(f){var input=inputs[f.key];if(input&&input.main&&input.main.closest('.row'))input.main.closest('.row').style.display=simple&&basic.indexOf(f.key)<0?'none':'';});
+ var sections=el('groups').children;
+ for(var i=0;i<sections.length;i++){
+  var section=sections[i], title=section.querySelector('h2'), group=title?title.textContent:'';
+  section.hidden=simple?!fields.some(function(f){return f.group===group&&basic.indexOf(f.key)>=0;}):i!==0;
+  if(el('tabs').children[i])el('tabs').children[i].setAttribute('aria-pressed',String(i===0));
+ }
+}
 function draw(data){
  fields=data.fields.filter(function(f){return !f.hidden;});saved=data.values;var sections={};
  fields.forEach(function(f){
+  if(f.key==='UiView')return;
   var section=sections[f.group];if(!section){section=node('section',el('groups'));sections[f.group]=section;node('h2',section,f.group);
    var tab=node('button',el('tabs'),f.group);
    section.hidden=Object.keys(sections).length>1;
@@ -55,46 +71,86 @@ function draw(data){
   else if(f.type==='toggle'){i.main=node('input',right);i.main.type='checkbox';}
   else if(f.type==='color'){i.main=node('input',right);i.main.type='color';}
   else if(f.type==='ipv4'){i.main=node('input',right);i.main.type='text';i.main.inputMode='decimal';i.main.autocomplete='off';i.main.pattern='(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])(?:\\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])){3}';i.main.required=true;}
-  else if(f.options||f.choices){i.main=node('select',right);(f.choices||Object.keys(f.options)).forEach(function(k){var parent=i.main;
-    if(f.key==='Lighting'){
-     var label=['screen','audio','solid'].indexOf(k)>=0?'Main modes':'Effects';
-     var group=i.main.lastElementChild;
-     if(!group||group.label!==label){group=node('optgroup',i.main);group.label=label;}
-     parent=group;
-    }
-    var o=node('option',parent,f.options?f.options[k]:k);o.value=k;});}
+  else if(f.options||f.choices){
+   if(f.key==='Lighting'){
+    i.main=node('select',right);i.main.style.display='none';
+    var cards=node('div',right);cards.className='mode-cards';
+    (f.choices||Object.keys(f.options)).forEach(function(k){
+     var o=node('option',i.main,f.options?f.options[k]:k);o.value=k;
+     var card=node('button',cards);card.type='button';card.className='mode-card';card.dataset.value=k;
+     node('strong',card,f.options[k]);node('small',card,k==='screen'?'Picture colors':k==='screen-audio'?'Picture + live audio':'Live TV audio');
+     card.onclick=function(){i.main.value=k;fill(saved);i.main.value=k;change();cards.querySelectorAll('.mode-card').forEach(function(c){c.classList.toggle('selected',c.dataset.value===k);});};
+    });
+    cards.querySelectorAll('.mode-card').forEach(function(c){c.classList.toggle('selected',c.dataset.value===saved.Lighting);});
+   } else {
+    i.main=node('select',right);(f.choices||Object.keys(f.options)).forEach(function(k){var o=node('option',i.main,f.options?f.options[k]:k);o.value=k;});
+   }
+  }
   else{i.range=node('input',right);i.range.type='range';i.range.setAttribute('aria-label',f.label);i.main=node('input',right);i.main.type='number';i.main.required=true;
    [i.range,i.main].forEach(function(n){n.min=f.min;n.max=f.max;n.step=1;});i.range.oninput=function(){i.main.value=i.range.value;change();};
    node('span',right,f.unit).className='unit';
   }
-  if(f.key==='Wled') addDiscovery(right,i.main);
-  i.main.id=f.key;i.main.oninput=i.main.onchange=function(){if(i.range)i.range.value=i.main.value;change();};
+  if(f.key==='Wled'){
+   addDiscovery(right,i.main);
+   var lastProbe='', probeTimer;
+   i.main.oninput=i.main.onchange=function(){
+    if(i.range)i.range.value=i.main.value;
+    if(f.key==='UiView')saved.UiView=i.main.value;
+    if(f.key==='UiView')setView();
+    if(/^(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/.test(i.main.value)){
+     clearTimeout(probeTimer);probeTimer=setTimeout(function(){
+      if(lastProbe===i.main.value)return;lastProbe=i.main.value;
+      var card=right.querySelector('[aria-live]');
+      if(card)card.textContent='Reading LED count…';
+      request('wled-probe',{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({address:i.main.value})}).then(function(data){
+       var count=data.leds&&data.leds.count?data.leds.count:data.leds;
+       if(!count)return;
+       count=Math.max(1,Math.min(4096,Number(count)));saved.Wled=i.main.value;saved.Leds=count;
+       var ends=[0,172,269,441,538];
+       ['Top','Right','Bottom','Left'].forEach(function(side,n){var c=Math.round(count*ends[n+1]/538)-Math.round(count*ends[n]/538);saved[side+'Count']=c;if(inputs[side+'Count'])inputs[side+'Count'].main.value=c;});
+       if(inputs.Leds)inputs.Leds.main.value=count;if(card)card.textContent=data.name+' · '+count+' LEDs detected';change();
+      }).catch(function(error){if(card)card.textContent=error.message;});
+     },650);
+    }
+    change();
+   };
+  } else {
+   i.main.id=f.key;i.main.oninput=i.main.onchange=function(){if(i.range)i.range.value=i.main.value;change();};
+  }
  });
- var basic=['Lighting','Tint','Period','Wled','Brightness','Smooth'];
- function setView(){
-  var simple=el('view').value==='simple';
-  el('diagnosticsPanel').hidden=simple;
-  el('tabs').style.display=simple?'none':'';
-  fields.forEach(function(f){inputs[f.key].main.closest('.row').style.display=simple&&basic.indexOf(f.key)<0?'none':'';});
-  Object.keys(sections).forEach(function(group,index){
-   sections[group].hidden=simple?!fields.some(function(f){return f.group===group&&basic.indexOf(f.key)>=0;}):index!==0;
-   el('tabs').children[index].setAttribute('aria-pressed',String(index===0));
-  });
-  try{localStorage.setItem('studioView',el('view').value);}catch(e){}
- }
- try{if(localStorage.getItem('studioView')==='advanced')el('view').value='advanced';}catch(e){}
- el('view').onchange=setView;setView();fill(saved);el('defaults').disabled=false;
+ el('view').onchange=function(){saved.UiView=el('view').value;setView();change();};
+ el('view').value=saved.UiView||'simple';
+ setView();fill(saved);el('defaults').disabled=false;
 }
 function addDiscovery(parent,input){
  var search=node('button',parent,'Find WLED controllers'), results=node('div',parent);
  search.type='button'; results.setAttribute('aria-live','polite');
+ function probe(address){
+  if(!address)return;
+  results.textContent='Reading LED count…';
+  request('wled-probe',{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({address:address})}).then(function(data){
+   var ledCount=data.leds&&data.leds.count?data.leds.count:data.leds;
+   if(!ledCount)return;
+   ledCount=Math.max(1,Math.min(4096,Number(ledCount)));
+   saved.Wled=address;saved.Leds=ledCount;
+   var ends=[0,172,269,441,538];
+   ['Top','Right','Bottom','Left'].forEach(function(side,i){
+    var count=Math.round(ledCount*ends[i+1]/538)-Math.round(ledCount*ends[i]/538);
+    saved[side+'Count']=count;
+    if(inputs[side+'Count'])inputs[side+'Count'].main.value=count;
+   });
+   if(inputs.Leds)inputs.Leds.main.value=ledCount;
+   results.textContent=data.name+' · '+ledCount+' LEDs detected';
+   change();
+  }).catch(function(error){results.textContent=error.message;});
+ }
  search.onclick=function(){
   search.disabled=true;results.textContent='Searching the local network…';
   request('discover',{method:'POST'}).then(function(data){
    results.textContent=data.devices.length?'':'No controllers advertised. Enter an IPv4 address manually.';
    data.devices.forEach(function(device){
     var pick=node('button',results,device.name+' · '+device.address);pick.type='button';
-    pick.onclick=function(){input.value=device.address;change();results.textContent='Selected '+device.name+'. Apply settings to use it.';};
+    pick.onclick=function(){input.value=device.address;probe(device.address);change();};
    });
   }).catch(function(error){results.textContent=error.message;}).then(function(){search.disabled=false;});
  };
@@ -120,7 +176,12 @@ function live(){
   var text=data.stdout||'';
   el('diagnostics').textContent=text||'Waiting for capture…';
   metric(text,/(\d+) regions/,'zones');metric(text,/capture ([\d.]+)\/s/,'fps');metric(text,/changed ([\d.]+)\/s/,'changes');
-  el('status').textContent=text.indexOf('TV sampled RGB')>=0?'TV color sampler':text.indexOf('HDR10 PQ')>=0?'Full picture · HDR':text.indexOf('SDR BT.709')>=0?'Full picture · SDR':text.indexOf('stopped')>=0?'Stopped':'Waiting for capture…';
+  var audio=text.match(/audio level (\d+)/)||text.match(/audio rms (\d+)/)||text.match(/audio (\d+)/);
+  if(audio)el('audioLevel').textContent=audio[1]+'/255';
+  else if(saved.Lighting==='tv-audio'||saved.Lighting==='screen-audio')el('audioLevel').textContent='Listening';
+  var bytes=text.match(/audio bytes (\d+)/);
+  if(bytes){var mb=Number(bytes[1])/1048576;el('audioBytes').textContent=(mb<1?'<1':mb.toFixed(1))+' MB';}
+  el('status').textContent=saved.Lighting==='tv-audio'?'TV audio sync':saved.Lighting==='screen-audio'?'Screen + TV audio':saved.Lighting==='screen'?(text.indexOf('TV sampled RGB')>=0?'TV color sampler':text.indexOf('HDR10 PQ')>=0?'Full picture · HDR':text.indexOf('SDR BT.709')>=0?'Full picture · SDR':'Screen sync'):'Effect active';
  }).catch(function(){el('status').textContent='Capture status unavailable';});
 }
 function preview(){
@@ -128,7 +189,7 @@ function preview(){
  request('preview').then(function(data){
   ctx.clearRect(0,0,768,38);
   var rgb=atob(data.rgb||'');
-  if(rgb.length!==144){el('previewState').textContent=saved.Lighting==='audio'?'Audio sync runs on WLED':'No recent output';return;}
+  if(rgb.length!==144){el('previewState').textContent='No recent picture output';return;}
   for(var i=0;i<48;i++){
    ctx.fillStyle='rgb('+rgb.charCodeAt(3*i)+','+rgb.charCodeAt(3*i+1)+','+rgb.charCodeAt(3*i+2)+')';
    ctx.fillRect(i*16,0,16,38);

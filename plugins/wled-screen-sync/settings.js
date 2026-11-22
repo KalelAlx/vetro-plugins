@@ -1,5 +1,5 @@
 'use strict';
-var fs = require('fs'), path = require('path');
+var fs = require('fs'), path = require('path'), http = require('http');
 var fields = require('./controls.json');
 function valid(f, v) {
     if (f.type === 'toggle') return typeof v === 'boolean';
@@ -9,7 +9,26 @@ function valid(f, v) {
     if (f.choices) return f.choices.indexOf(v) >= 0;
     return typeof v === 'number' && v === Math.floor(v) && v >= f.min && v <= f.max;
 }
-module.exports = function(ctx, status) {
+module.exports = function(ctx, status, onModeChange) {
+    function httpGet(address,pathname,timeout,cb){
+        var req=http.get({host:address,port:80,path:pathname,timeout:timeout},function(res){
+            var body='',size=0;
+            res.on('data',function(chunk){size+=chunk.length;if(size>65536){req.destroy();return;}body+=chunk.toString('utf8');});
+            res.on('end',function(){cb(null,res.statusCode,body);});
+        });
+        req.on('timeout',function(){req.destroy(Error('WLED timed out'));});
+        req.on('error',cb);
+    }
+    function httpPost(address,pathname,body,timeout,cb){
+        var req=http.request({host:address,port:80,path:pathname,method:'POST',headers:{'Content-Type':'application/json','Content-Length':Buffer.byteLength(body)},timeout:timeout},function(res){
+            var text='',size=0;
+            res.on('data',function(chunk){size+=chunk.length;if(size>65536){req.destroy();return;}text+=chunk.toString('utf8');});
+            res.on('end',function(){cb(null,res.statusCode,text);});
+        });
+        req.on('timeout',function(){req.destroy(Error('WLED timed out'));});
+        req.on('error',cb);
+        req.end(body);
+    }
     function load() {
         var old = ctx.config.get() || {}, values = {};
         fields.forEach(function(f){ values[f.key] = valid(f,old[f.key]) ? old[f.key] : f.default; });
@@ -47,34 +66,31 @@ module.exports = function(ctx, status) {
             return true;
         }
         if (sub === 'preview' && req.method === 'GET') {
-            // The capture service and the dashboard can have separate /tmp mounts.
-            // Read in the same execution context used for capture statistics.
-            var readPreview = 'file=/tmp/ambilight-studio-preview; ' +
-                'if [ -r "$file" ]; then modified=$(stat -c %Y "$file") || exit 1; ' +
-                'age=$(($(date +%s)-modified)); ' +
-                'if [ "$age" -ge 0 ] && [ "$age" -lt 4 ]; then cat "$file"; fi; fi';
-            ctx.execute(readPreview,2000).then(function(result){
-                if (result.exit_code || result.timed_out) return json(res,{error:'Preview read failed'},503);
-                var rgb = (result.stdout || '').trim();
+            try {
+                var preview=path.join(ctx.dir,'runtime','preview.b64');
+                var rgb=fs.existsSync(preview)?fs.readFileSync(preview,'utf8').trim():'';
                 json(res,{rgb:/^[A-Za-z0-9+/]{192}$/.test(rgb) ? rgb : ''});
-            },function(){json(res,{error:'Preview unavailable'},503);});
+            } catch(e){json(res,{error:'Preview unavailable'},503);}
             return true;
         }
         if (sub === 'live' && req.method === 'GET') { json(res,status());return true; }
         if (sub === 'wled-probe' && req.method === 'POST') {
             var probeBody='';
             req.on('data',function(chunk){probeBody+=chunk;});
+            req.on('data',function(chunk){if(probeBody.length>4096)req.destroy();});
             req.on('end',function(){
                 try {
                     var address=JSON.parse(probeBody).address;
                     var field=fields.filter(function(item){return item.key==='Wled';})[0];
                     if(!valid(field,address))throw Error('Enter a valid WLED IPv4 address');
-                    ctx.execute('curl --connect-timeout 2 --max-time 4 -fsS http://'+address+'/json/info',5000)
-                        .then(function(result){
-                            if(result.exit_code || result.timed_out)throw Error('No WLED response at '+address);
-                            var info=JSON.parse(result.stdout);
+                    httpGet(address,'/json/info',4000,function(error,code,body){
+                        if(error)return json(res,{error:error.message||'No WLED response at '+address},400);
+                        if(code<200||code>=300)return json(res,{error:'No WLED response at '+address},400);
+                        try {
+                            var info=JSON.parse(body);
                             json(res,{address:address,name:info.name||'WLED',leds:info.leds&&info.leds.count,version:info.ver||''});
-                        }).catch(function(error){json(res,{error:error.message},400);});
+                        } catch(e){json(res,{error:'Invalid WLED response'},400);}
+                    });
                 } catch(error) { json(res,{error:error.message},400); }
             });
             return true;
@@ -95,20 +111,36 @@ module.exports = function(ctx, status) {
                 });
                 next.Leds=next.TopCount+next.RightCount+next.BottomCount+next.LeftCount;
                 if(next.Leds<1 || next.Leds>4096) throw Error('The four sides must total 1 to 4096 LEDs.');
-                function save(){ctx.config.set(next);current=next;json(res,{values:current});}
-                if(next.Lighting==='audio' && (current.Lighting!=='audio' || current.Wled!==next.Wled)){
-                    var target='http://'+next.Wled;
-                    ctx.execute('curl -fsS --max-time 3 '+target+'/json/eff',4000).then(function(result){
-                        var names=JSON.parse(result.stdout);
-                        var effect=names.indexOf('Freqwave');
-                        if(effect<0) throw Error('This WLED controller does not advertise the Freqwave audio effect.');
-                        var body=JSON.stringify({on:true,lor:0,seg:[{id:0,on:true,fx:effect}]});
-                        return ctx.execute("curl -fsS --max-time 3 -H 'Content-Type: application/json' --data '"+body+"' "+target+'/json/state',4000);
-                    }).then(function(result){
-                        if(result.exit_code || result.timed_out || !JSON.parse(result.stdout).success) throw Error('WLED refused audio sync');
+                var save=function(){
+                    var previous=current.Lighting;
+                    ctx.config.set(next);current=next;
+                    if(onModeChange)onModeChange(next.Lighting,previous);
+                    json(res,{values:current});
+                };
+                var modeSave=function(){
+                    if(next.Wled==='127.0.0.1'){
+                        save();return;
+                    }
+                    httpPost(next.Wled,'/json/state',JSON.stringify({on:true,seg:[{id:0,on:true,fx:0}]}),4000,function(error,code){
                         save();
-                    }).catch(function(e){json(res,{error:e.message},400);});
-                } else save();
+                    });
+                };
+                if(next.Wled!==current.Wled){
+                    httpGet(next.Wled,'/json/info',4000,function(error,code,body){
+                        if(error||code<200||code>=300)return save();
+                        try{
+                            var info=JSON.parse(body), count=info.leds&&info.leds.count;
+                            if(count && count===Math.floor(count) && count>=1 && count<=4096){
+                                next.Leds=count;
+                                var ends=[0,172,269,441,538];
+                                ['Top','Right','Bottom','Left'].forEach(function(side,i){
+                                    next[side+'Count']=Math.round(count*ends[i+1]/538)-Math.round(count*ends[i]/538);
+                                });
+                            }
+                        }catch(e){}
+                        modeSave();
+                    });
+                } else modeSave();
             } catch(e){json(res,{error:e.message},400);}
         });
         return true;

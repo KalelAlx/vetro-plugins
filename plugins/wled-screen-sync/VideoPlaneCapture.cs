@@ -173,6 +173,8 @@ namespace TizenAmbilight
         /// Returns null on success, or the error text.</summary>
         public static string Init()
         {
+            if (IntPtr.Size != 4)
+                return "unsupported runtime: this helper requires a 32-bit little-endian .NET runtime";
             if (_call != null) return null;
 
             try
@@ -222,6 +224,18 @@ namespace TizenAmbilight
             if (_lib != IntPtr.Zero) { try { dlclose(_lib); } catch {} }
             _lib = IntPtr.Zero;
             return Init();
+        }
+
+        public static void Release()
+        {
+            _call = null;
+            if (_param != IntPtr.Zero) Marshal.FreeHGlobal(_param);
+            if (_bufY != IntPtr.Zero) Marshal.FreeHGlobal(_bufY);
+            if (_bufC != IntPtr.Zero) Marshal.FreeHGlobal(_bufC);
+            _param = _bufY = _bufC = IntPtr.Zero;
+            _fn = IntPtr.Zero;
+            if (_lib != IntPtr.Zero) { try { dlclose(_lib); } catch {} }
+            _lib = IntPtr.Zero;
         }
 
         /// <summary>Measure the chroma spread one color_format value produces. Returns -1 if the

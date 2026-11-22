@@ -6,31 +6,64 @@
   "default": "screen",
   "options": {
    "screen": "Screen sync",
-   "audio": "Audio sync",
-   "solid": "Solid",
-   "twinkle": "Twinkle",
-   "wave": "Rolling wave",
-   "spark": "Fireflies",
-   "breathe": "Breathe",
-   "chase": "Comet trail"
+   "screen-audio": "Screen + TV audio",
+   "tv-audio": "TV audio sync"
   },
-  "hint": "Audio sync uses the WLED controller\u2019s audio input or audio-sync receiver. TV strip preview and side masking apply to TV-generated output."
+  "hint": "Screen + TV audio combines the picture and live TV sound."
  },
  {
-  "group": "Lighting",
-  "key": "Tint",
-  "label": "Manual color",
-  "type": "color",
-  "default": "#ff8844"
+  "group": "TV audio",
+  "key": "AudioReaction",
+  "label": "Audio reaction",
+  "default": "spectrum",
+  "options": {
+   "pulse": "Center pulse",
+   "bass": "Bass wave",
+   "spectrum": "Spectrum",
+   "beat": "Beat flash",
+   "ambient": "Ambient color"
+  },
+  "hint": "How live TV audio is translated into LED colors."
  },
  {
-  "group": "Lighting",
-  "key": "Period",
-  "label": "Effect cycle",
-  "default": 4,
-  "min": 1,
-  "max": 20,
-  "unit": "s"
+  "group": "TV audio",
+  "key": "AudioSensitivity",
+  "label": "Audio sensitivity",
+  "default": 100,
+  "min": 25,
+  "max": 300,
+  "unit": "%"
+ },
+ {
+  "group": "TV audio",
+  "key": "AudioBlend",
+  "label": "Combined audio intensity",
+  "default": 35,
+  "min": 0,
+  "max": 100,
+  "unit": "%"
+ },
+ {
+  "group": "TV audio",
+  "key": "AudioSampling",
+  "label": "Audio sampling",
+  "default": "balanced",
+  "options": {
+   "impact": "Impact only · loud sounds",
+   "balanced": "Balanced · speech and action",
+   "music": "Music · smooth rhythm"
+  },
+  "hint": "Impact reacts to sudden loud peaks. Music responds smoothly to sustained rhythm."
+ },
+ {
+  "group": "Display",
+  "key": "UiView",
+  "label": "Settings view",
+  "default": "simple",
+  "options": {
+   "simple": "Simple",
+   "advanced": "Advanced"
+  }
  },
  {
   "group": "WLED target",
@@ -225,7 +258,7 @@
   "label": "WLED address",
   "default": "127.0.0.1",
   "type": "ipv4",
-  "hint": "Enter the WLED controller IPv4 address."
+  "hint": "Choose a controller or enter its IPv4 address. LED count is detected automatically."
  },
  {
   "group": "WLED target",

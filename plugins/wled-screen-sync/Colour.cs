@@ -3,6 +3,126 @@ using System.Diagnostics;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 
+internal static class TvAudioCapture
+{
+    private static Process process;
+    private static volatile bool running;
+    private static volatile int bass, mid, treble;
+    private static long capturedBytes;
+    private static volatile int rmsLevel;
+    private static volatile int peakLevel;
+    private static volatile int filteredLevel;
+    private static double audioEnvelope;
+
+    public static int Bass { get { return bass; } }
+    public static int Mid { get { return mid; } }
+    public static int Treble { get { return treble; } }
+    public static bool Running { get { return running; } }
+    public static long CapturedBytes { get { return System.Threading.Interlocked.Read(ref capturedBytes); } }
+    public static int RmsLevel { get { return rmsLevel; } }
+    public static int PeakLevel { get { return peakLevel; } }
+    public static int FilteredLevel { get { return filteredLevel; } }
+
+    public static void ApplyProfile(string sampling,int sensitivity)
+    {
+        double gain=Math.Max(0.25,sensitivity/100.0);
+        double rms=rmsLevel/255.0*gain;
+        double peak=peakLevel/255.0*gain;
+        double next;
+        if(sampling=="impact") {
+            double threshold=0.42;
+            next=peak>=threshold ? (peak-threshold)/(1-threshold) : 0;
+            audioEnvelope=audioEnvelope>next ? audioEnvelope*0.82 : next;
+        } else if(sampling=="music") {
+            next=rms*0.72+peak*0.28;
+            audioEnvelope=next>audioEnvelope ? audioEnvelope+(next-audioEnvelope)*0.18 : audioEnvelope+(next-audioEnvelope)*0.08;
+        } else {
+            next=Math.Min(1,rms*0.75+peak*0.25);
+            audioEnvelope=next>audioEnvelope ? audioEnvelope+(next-audioEnvelope)*0.28 : audioEnvelope+(next-audioEnvelope)*0.12;
+        }
+        filteredLevel=(int)Math.Round(Math.Max(0,Math.Min(255,audioEnvelope*255)));
+        int overall=filteredLevel;
+        bass=overall;
+        mid=(int)Math.Round(overall*0.75);
+        treble=(int)Math.Round(overall*0.50);
+    }
+
+    public static void Start()
+    {
+        if (running) return;
+        running = true;
+        var thread = new System.Threading.Thread(ReadLoop) { IsBackground = true };
+        thread.Start();
+    }
+
+    public static void Stop()
+    {
+        running = false;
+        try {
+            if (process != null && !process.HasExited) process.Kill();
+        } catch (InvalidOperationException) {}
+        process = null;
+    }
+
+    private static void ReadLoop()
+    {
+        try {
+            var start = new ProcessStartInfo("arecord")
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            start.Arguments = "-q -D hw:0,5 -f S16_LE -r 48000 -c 2 -t raw";
+            process = Process.Start(start);
+            if (process == null) { running = false; return; }
+            var stream = process.StandardOutput.BaseStream;
+            var buffer = new byte[8192];
+            int count;
+            while (running && (count = stream.Read(buffer,0,buffer.Length)) > 0)
+            {
+                System.Threading.Interlocked.Add(ref capturedBytes,count);
+                int frames = count / 4;
+                var mono = new int[frames];
+                for (int i=0;i<frames;i++) {
+                    short left=BitConverter.ToInt16(buffer,i*4);
+                    short right=BitConverter.ToInt16(buffer,i*4+2);
+                    mono[i]=(left+right)/2;
+                }
+                if (frames < 128) continue;
+                double rms=0;
+                int peak=0;
+                for(int i=0;i<frames;i++) rms += mono[i]*mono[i];
+                for(int i=0;i<frames;i++) peak=Math.Max(peak,Math.Abs(mono[i]));
+                rms=Math.Sqrt(rms/frames)/32768.0;
+                rmsLevel=(int)Math.Round(Math.Min(255,Math.Max(rms*255*4,peak/32768.0*255)));
+                peakLevel=(int)Math.Round(Math.Min(255,peak/32768.0*255));
+                int overall=(int)Math.Round((double)Math.Min(255,rmsLevel));
+                bass=overall;
+                mid=(int)Math.Round(overall*0.75);
+                treble=(int)Math.Round(overall*0.50);
+            }
+        } catch (Exception) {
+            running = false;
+        }
+    }
+
+    private static int Level(int[] samples,int count,double frequency)
+    {
+        int used=Math.Min(count,1024);
+        double omega=2*Math.PI*frequency/48000.0;
+        double real=0, imag=0;
+        for(int i=0;i<used;i++) {
+            double value=samples[i]/32768.0;
+            real += value*Math.Cos(omega*i);
+            imag -= value*Math.Sin(omega*i);
+        }
+        double magnitude=Math.Sqrt(real*real+imag*imag)/used*2;
+        return (int)Math.Round(Math.Min(255,magnitude*255));
+    }
+}
+
 internal static class WledAmbiPpi
 {
     [DllImport("libvconf.so.0", EntryPoint="vconf_get_int", CharSet=CharSet.Ansi)]
@@ -411,6 +531,20 @@ internal static class WledAmbiPpi
     private static byte Channel(int scaled) { return (byte)Math.Max(0,Math.Min(255,(scaled+512)>>10)); }
 
     private static volatile byte[] latest;
+    private static string statusDir;
+
+    private static void WriteStatus(string status)
+    {
+        if (String.IsNullOrEmpty(statusDir)) statusDir = AppContext.BaseDirectory;
+        try { System.IO.File.WriteAllText(System.IO.Path.Combine(statusDir,"rate.txt"),status); }
+        catch (System.IO.IOException) {}
+    }
+    private static void WritePreview(string preview)
+    {
+        if (String.IsNullOrEmpty(statusDir)) statusDir = AppContext.BaseDirectory;
+        try { System.IO.File.WriteAllText(System.IO.Path.Combine(statusDir,"preview.b64"),preview); }
+        catch (System.IO.IOException) {}
+    }
 
 
 
@@ -433,6 +567,7 @@ internal static class WledAmbiPpi
         var window = Stopwatch.StartNew();
         while (true)
         {
+            tuning = Tuning.Read(tuning);
             var previous = latest;
             double started = uptime.Elapsed.TotalMilliseconds;
             if(started>=nextSourcePoll) {
@@ -541,12 +676,20 @@ internal static class WledAmbiPpi
             status += full ? (hdr ? ", HDR10 PQ BT.2020" : ", SDR BT.709") : pictureRecovery ? ", trying full-picture recovery" : ", TV sampled RGB";
             status += ", saturation " + tuning.Saturation + "%, smoothing " + tuning.Smooth + " ms, sampling " + tuning.SampleMode;
             if (inputChroma > 0) status += String.Format(", zone chroma cancellation {0:F1}%",100*(1-averagedChroma/inputChroma));
+            if (tuning.Lighting == "screen-audio" || tuning.Lighting == "tv-audio")
+            {
+                status += ", audio rms " + TvAudioCapture.RmsLevel;
+                status += ", audio peak " + TvAudioCapture.PeakLevel;
+                status += ", audio level " + TvAudioCapture.FilteredLevel;
+                status += ", audio sampling " + tuning.AudioSampling;
+                status += ", audio bytes " + TvAudioCapture.CapturedBytes;
+            }
             inputChroma = averagedChroma = 0;
             longestReadMs = 0;
             planeMilliseconds = 0;
             changed = 0;
-            try { System.IO.File.WriteAllText("/tmp/ambilight-studio-rate", status); }
-            catch (System.IO.IOException) {}
+            if (tuning.Lighting == "screen" || tuning.Lighting == "tv-audio" || tuning.Lighting=="screen-audio")
+                WriteStatus(status);
             scans = 0;
             window.Restart();
         }
@@ -554,17 +697,27 @@ internal static class WledAmbiPpi
 
     private static int Main(string[] args)
     {
+        for(int i=0;i<args.Length;i++)
+        {
+            if(args[i]=="--check-platform") {
+                if(IntPtr.Size!=4) { Console.Error.WriteLine("32-bit little-endian runtime required"); return 2; }
+                return 0;
+            }
+            if(args[i]=="--status-dir" && i+1<args.Length) statusDir=args[++i];
+        }
+        if(IntPtr.Size!=4) { Console.Error.WriteLine("32-bit little-endian runtime required"); return 2; }
         tuning = Tuning.Read(tuning);
-        if (!PpiVeInit()) return 1;
+        if(!PpiVeInit()) { WriteStatus("Helper unavailable: TV video sampler API is not supported"); return 1; }
         latest = new byte[LedCount * 3];
         var current = Array.ConvertAll(latest, value => (double)value);
-        var capture = new System.Threading.Thread(Capture) { IsBackground = true };
-        capture.Start();
         var pixels = new byte[current.Length];
         var clock = Stopwatch.StartNew();
         double nextPreview = 0;
         double previous = 0;
         double next = 0;
+        string activeMode = null;
+        bool captureRunning = false;
+        double nextTvAudioRestart = 0;
         using (var udp = new UdpClient())
         {
             System.Net.IPEndPoint endpoint = null;
@@ -572,32 +725,93 @@ internal static class WledAmbiPpi
             while (true)
             {
                 double now = clock.Elapsed.TotalMilliseconds;
+                tuning = Tuning.Read(tuning);
                 var config = tuning;
-                if (config.Lighting=="audio") {
-                    System.Threading.Thread.Sleep(100);
-                    next=previous=clock.Elapsed.TotalMilliseconds;
-                    continue;
-                }
-                double blend = config.Smooth==0 ? 1 : 1 - Math.Exp(-(now - previous) / config.Smooth);
-                previous = now;
-                var target = latest;
-                for (int i = 0; i < pixels.Length; i++)
+                if (activeMode != config.Lighting)
                 {
-                    current[i] += (target[i] - current[i]) * blend;
-                    pixels[i] = (byte)Math.Round(current[i]);
+                    if (activeMode == "tv-audio" || activeMode == "screen-audio") TvAudioCapture.Stop();
+                    activeMode = config.Lighting;
+                    if ((config.Lighting == "screen" || config.Lighting == "screen-audio") && !captureRunning)
+                    {
+                        captureRunning = true;
+                        var capture = new System.Threading.Thread(Capture) { IsBackground = true };
+                        capture.Start();
+                    }
+                    if (config.Lighting == "tv-audio" || config.Lighting == "screen-audio") TvAudioCapture.Start();
+                    if (config.Lighting != "tv-audio" && config.Lighting != "screen-audio") TvAudioCapture.Stop();
                 }
-                if (config.Lighting != "screen") RenderManual(pixels,config,now);
-                config.Apply(pixels);
+                if (config.Lighting != "screen" && config.Lighting != "screen-audio" && captureRunning)
+                {
+                    captureRunning = false;
+                    TizenAmbilight.VideoPlaneCapture.Release();
+                }
+                if (config.Lighting != "screen" && config.Lighting != "tv-audio" && config.Lighting != "screen-audio")
+                {
+                    string effectStatus = "Effect active: " + config.Lighting;
+                    WriteStatus(effectStatus);
+                }
+                if (config.Lighting == "tv-audio")
+                {
+                    TvAudioCapture.ApplyProfile(config.AudioSampling,config.AudioSensitivity);
+                    RenderAudio(pixels, now, config);
+                    config.Apply(pixels);
+                    if (now >= nextTvAudioRestart)
+                    {
+                        if (!TvAudioCapture.Running) TvAudioCapture.Start();
+                        WriteStatus("TV audio sync active, capture " + (TvAudioCapture.Running ? "running" : "starting") +
+                            ", rms " + TvAudioCapture.RmsLevel + ", peak " + TvAudioCapture.PeakLevel +
+                            ", audio " + TvAudioCapture.FilteredLevel + ", sampling " + config.AudioSampling +
+                            ", bytes " + TvAudioCapture.CapturedBytes);
+                        nextTvAudioRestart = now + 1000;
+                    }
+                }
+                else if (config.Lighting == "screen-audio")
+                {
+                    TvAudioCapture.ApplyProfile(config.AudioSampling,config.AudioSensitivity);
+                    double blend = config.Smooth==0 ? 1 : 1 - Math.Exp(-(now - previous) / config.Smooth);
+                    previous = now;
+                    var target = latest;
+                    for (int i = 0; i < pixels.Length; i++)
+                    {
+                        current[i] += (target[i] - current[i]) * blend;
+                        pixels[i] = (byte)Math.Round(current[i]);
+                    }
+                    BlendScreenWithAudio(pixels, now, config);
+                    config.Apply(pixels);
+                    if (now >= nextTvAudioRestart)
+                    {
+                        if (!TvAudioCapture.Running) TvAudioCapture.Start();
+                        nextTvAudioRestart = now + 1000;
+                    }
+                }
+                else
+                {
+                    double blend = config.Smooth==0 ? 1 : 1 - Math.Exp(-(now - previous) / config.Smooth);
+                    previous = now;
+                    var target = latest;
+                    for (int i = 0; i < pixels.Length; i++)
+                    {
+                        current[i] += (target[i] - current[i]) * blend;
+                        pixels[i] = (byte)Math.Round(current[i]);
+                    }
+                    config.Apply(pixels);
+                }
                 int port = config.Protocol=="dnrgb" ? 21324 : 4048;
-                if (destination != config.Wled || endpoint.Port != port) { endpoint = new System.Net.IPEndPoint(System.Net.IPAddress.Parse(config.Wled),port); destination = config.Wled; }
                 try {
                     bool previewDue = now >= nextPreview;
                     byte[] preview = previewDue ? new byte[48 * 3] : null;
-                    SendDdp(udp, endpoint, pixels, config, preview);
+                    if (config.Wled != "127.0.0.1")
+                    {
+                        if (endpoint == null || destination != config.Wled || endpoint.Port != port)
+                        {
+                            endpoint = new System.Net.IPEndPoint(System.Net.IPAddress.Parse(config.Wled),port);
+                            destination = config.Wled;
+                        }
+                        SendDdp(udp, endpoint, pixels, config, preview);
+                    }
                     if (previewDue) {
                         nextPreview = now + 1000;
-                        try { System.IO.File.WriteAllText("/tmp/ambilight-studio-preview", Convert.ToBase64String(preview)); }
-                        catch (System.IO.IOException) { }
+                        WritePreview(Convert.ToBase64String(preview));
                     }
                 }
                 catch (SocketException) { System.Threading.Interlocked.Increment(ref udpErrors); }
@@ -608,29 +822,51 @@ internal static class WledAmbiPpi
             }
         }
     }
-    private static void RenderManual(byte[] pixels,Tuning config,double now)
+    private static void RenderAudio(byte[] pixels,double now,Tuning config)
     {
-        double phase = (now / (1000 * config.Period)) % 1;
-        double pulse = config.Lighting=="breathe" ? 0.5-0.5*Math.Cos(2*Math.PI*phase) : 1;
-        for (int i=0;i<LedCount;i++) {
-            double gain=pulse;
-            if(config.Lighting=="wave") gain=0.5+0.5*Math.Cos(2*Math.PI*(3.0*i/LedCount-phase));
-            if(config.Lighting=="twinkle" || config.Lighting=="spark") {
-                bool firefly=config.Lighting=="spark";
-                double t=now/(config.Period*(firefly?900.0:250.0));
-                int cell=firefly?i/6:i;
-                t+=(cell*0.61803398875)%1;
-                uint hash=unchecked((uint)(cell*374761393+(int)t*668265263));
-                hash=unchecked((hash^(hash>>13))*1274126177u);
-                double envelope=Math.Sin(Math.PI*(t-Math.Floor(t)));
-                gain=(hash%100 < (firefly?24:14)) ? envelope*envelope : 0.025;
+        double gain=Math.Max(0.25,config.AudioSensitivity/100.0);
+        int bass=Math.Min(255,(int)(TvAudioCapture.Bass*gain));
+        int mid=Math.Min(255,(int)(TvAudioCapture.Mid*gain));
+        int treble=Math.Min(255,(int)(TvAudioCapture.Treble*gain));
+        int level=Math.Max(bass,Math.Max(mid,treble));
+        double pulse=level/255.0;
+        for (int i=0;i<LedCount;i++)
+        {
+            double position=i/(double)(LedCount-1);
+            int r,g,b;
+            if(config.AudioReaction=="pulse") {
+                double w=Math.Exp(-Math.Pow((position-0.5)*4.5,2))*pulse;
+                r=(byte)(255*w);g=(byte)(80*w);b=(byte)(220*w);
+            } else if(config.AudioReaction=="bass") {
+                r=(byte)(bass*(1-position)*0.9);g=(byte)(bass*position*0.9);b=(byte)(bass*Math.Sin(Math.PI*position)*0.35);
+            } else if(config.AudioReaction=="beat") {
+                double flash=pulse*pulse;
+                r=(byte)(255*flash);g=(byte)(180*flash);b=(byte)(255*flash);
+            } else if(config.AudioReaction=="ambient") {
+                double hue=(now/8000.0+position*0.20)%1;
+                HsvToRgb(hue,(0.75+0.25*pulse),(0.15+0.85*pulse),out r,out g,out b);
+            } else {
+                r=(byte)(bass*(1-position));g=(byte)(mid*(1-Math.Abs(position-0.5)*2));b=(byte)(treble*position);
             }
-            if(config.Lighting=="chase") {
-                double distance=(phase-i/(double)LedCount+1)%1;
-                gain=Math.Max(0,1-5*distance);
-            }
-            for(int ch=0;ch<3;ch++) pixels[3*i+ch]=(byte)Math.Round(((config.ManualRgb>>(16-8*ch))&255)*gain);
+            pixels[3*i]=(byte)r;pixels[3*i+1]=(byte)g;pixels[3*i+2]=(byte)b;
         }
+    }
+    private static void BlendScreenWithAudio(byte[] pixels,double now,Tuning config)
+    {
+        double level=TvAudioCapture.FilteredLevel/255.0;
+        double strength=config.AudioBlend/100.0;
+        double audioPulse=level*level;
+        double gain=(1.0-strength*0.45)+audioPulse*strength*0.75;
+        for(int i=0;i<pixels.Length;i++)
+            pixels[i]=(byte)Math.Max(0,Math.Min(255,Math.Round(pixels[i]*gain)));
+    }
+    private static void HsvToRgb(double h,double s,double v,out int r,out int g,out int b)
+    {
+        int i=(int)Math.Floor(h*6)%6;
+        double f=h*6-Math.Floor(h*6),p=v*(1-s),q=v*(1-f*s),t=v*(1-(1-f)*s);
+        double rr,gg,bb;
+        if(i==0){rr=v;gg=t;bb=p;}else if(i==1){rr=q;gg=v;bb=p;}else if(i==2){rr=p;gg=v;bb=t;}else if(i==3){rr=p;gg=q;bb=v;}else if(i==4){rr=t;gg=p;bb=v;}else{rr=v;gg=p;bb=q;}
+        r=(int)Math.Round(rr*255);g=(int)Math.Round(gg*255);b=(int)Math.Round(bb*255);
     }
     private static int udpErrors;
     private static byte sequence = 1;
