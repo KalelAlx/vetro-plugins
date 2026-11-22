@@ -152,8 +152,8 @@
         "exec"
       ],
       "url": "dist/wled-screen-sync-0.6.0.vplugin",
-      "sha256": "3eeca7c9dc7934dab1bb9c06fb3e2f596d71c546e7d5234151a482fa1cba4e42",
-      "size": 198967
+      "sha256": "d1677e6a488e7c5468b2caf144ff110510423976572a10ef82c7dca3fd1ce2eb",
+      "size": 199882
     },
     {
       "id": "youtube",

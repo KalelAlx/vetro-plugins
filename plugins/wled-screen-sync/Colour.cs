@@ -853,10 +853,13 @@ internal static class WledAmbiPpi
     }
     private static void BlendScreenWithAudio(byte[] pixels,double now,Tuning config)
     {
-        double level=TvAudioCapture.FilteredLevel/255.0;
+        // Preserve the picture at zero audio blend, then add a perceptual audio lift.
+        // The old squared level curve made normal dialogue/music nearly inaudible in screen mode.
+        double measured=TvAudioCapture.FilteredLevel/255.0;
+        double level=Math.Max(0,Math.Min(1,(measured-0.025)/0.55));
+        level=Math.Pow(level,0.65);
         double strength=config.AudioBlend/100.0;
-        double audioPulse=level*level;
-        double gain=(1.0-strength*0.45)+audioPulse*strength*0.75;
+        double gain=1.0+level*strength*1.6;
         for(int i=0;i<pixels.Length;i++)
             pixels[i]=(byte)Math.Max(0,Math.Min(255,Math.Round(pixels[i]*gain)));
     }
