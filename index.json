@@ -58,15 +58,15 @@
     {
       "id": "keyboard",
       "name": "Keyboard & Remote",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "author": "abdoghanem2011",
-      "description": "Text input, live 1080p screen preview, and full TV remote. Connects browser to TV port 8002 (WSS) for typing.",
+      "description": "Text input, live MJPEG/1080p screen preview, and full TV remote. Connects browser to TV port 8002 (WSS) and local 127.0.0.1:18888.",
       "permissions": [
         "exec"
       ],
-      "url": "dist/keyboard-1.0.0.vplugin",
-      "sha256": "723fc6ed08eb1e2733775e5b9532dedf9fdd36d43cbacf0b60a3d83848bb9c96",
-      "size": 143549
+      "url": "dist/keyboard-1.1.0.vplugin",
+      "sha256": "2876a4ecf4f5a6b21cab3ca4b509c2de2ec0a05f08ad1330f90e695a915b3f84",
+      "size": 165805
     },
     {
       "id": "nordvpn",

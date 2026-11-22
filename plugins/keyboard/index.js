@@ -16,6 +16,7 @@
 var fs = require('fs');
 var path = require('path');
 var os = require('os');
+var net = require('net');
 
 var LATIN_MAP = {
     ' ': 'space',
@@ -276,6 +277,396 @@ module.exports = function (ctx) {
         });
     }
 
+    var MAX_STREAM_CLIENTS = 4;
+    var STREAM_PID_FILE = '/tmp/vetro-keyboard-stream.pid';
+    var STOP_STREAM_CMD = "if [ -f " + STREAM_PID_FILE + " ]; then " +
+        "pid=$(cat " + STREAM_PID_FILE + " 2>/dev/null); " +
+        "case \"$pid\" in ''|*[!0-9]*) ;; *) " +
+        "if tr '\\0' ' ' < /proc/\"$pid\"/cmdline 2>/dev/null | grep -q 'tcpserversink.*18888'; then " +
+        "kill \"$pid\" 2>/dev/null; sleep 0.15; kill -9 \"$pid\" 2>/dev/null; " +
+        "fi ;; esac; " +
+        "rm -f " + STREAM_PID_FILE + "; fi";
+
+    var streamClients = [];
+    var streamProcRunning = false;
+    var streamConnecting = false;
+    var streamTcpSocket = null;
+    var lastFrame = null;
+    var lastFrameTime = 0;
+    var streamKillTimer = null;
+    var streamConnectTimer = null;
+    var streamRetryTimer = null;
+    var streamRetryCount = 0;
+    var streamPipelineRestarts = 0;
+    var screenshotWaiters = {};
+
+    function allocBuf(n) {
+        return (typeof Buffer.alloc === 'function') ? Buffer.alloc(n) : new Buffer(n);
+    }
+
+    function asciiBuf(str) {
+        return (typeof Buffer.from === 'function') ? Buffer.from(str, 'ascii') : new Buffer(str, 'ascii');
+    }
+
+    function createJpegParser(onFrame) {
+        var buffer = allocBuf(0);
+        return function (chunk) {
+            try {
+                if (!chunk || chunk.length === 0) return;
+                buffer = Buffer.concat([buffer, chunk]);
+                if (buffer.length > 2097152) {
+                    // Guard against unbounded growth if EOI marker is missed
+                    buffer = buffer.slice(buffer.length - 65536);
+                }
+                var latestFrame = null;
+                while (buffer.length > 4) {
+                    var start = -1;
+                    for (var i = 0; i < buffer.length - 1; i++) {
+                        if (buffer[i] === 0xFF && buffer[i + 1] === 0xD8) {
+                            start = i;
+                            break;
+                        }
+                    }
+                    if (start === -1) {
+                        buffer = buffer.slice(Math.max(0, buffer.length - 1));
+                        break;
+                    }
+                    var end = -1;
+                    for (var j = start + 2; j < buffer.length - 1; j++) {
+                        if (buffer[j] === 0xFF && buffer[j + 1] === 0xD9) {
+                            end = j + 2;
+                            break;
+                        }
+                    }
+                    if (end === -1) {
+                        if (start > 0) buffer = buffer.slice(start);
+                        break;
+                    }
+                    latestFrame = buffer.slice(start, end);
+                    buffer = buffer.slice(end);
+                }
+                if (latestFrame) {
+                    onFrame(latestFrame);
+                }
+            } catch (e) {}
+        };
+    }
+
+    function isClientReady(c) {
+        if (!c || c.closed || !c.res || !c.res.socket || !c.res.socket.writable || c.res.finished) return false;
+        if (c.busy && (Date.now() - c.lastSendTime > 2500)) {
+            c.busy = false;
+        }
+        return !c.busy && ((c.res.socket.bufferSize || 0) === 0);
+    }
+
+    function checkAllClientsClosed() {
+        if (streamClients.length === 0 && !streamKillTimer) {
+            streamKillTimer = setTimeout(function () {
+                streamKillTimer = null;
+                try {
+                    if (streamClients.length === 0) {
+                        stopStreamPipeline();
+                    }
+                } catch (e) {}
+            }, 2000);
+        }
+    }
+
+    function removeStreamClient(c) {
+        if (!c || c.closed) return;
+        c.closed = true;
+        var idx = streamClients.indexOf(c);
+        if (idx !== -1) streamClients.splice(idx, 1);
+        checkAllClientsClosed();
+    }
+
+    function closeAllStreamClients() {
+        for (var i = streamClients.length - 1; i >= 0; i--) {
+            streamClients[i].closed = true;
+            try { streamClients[i].res.end(); } catch (e) {}
+        }
+        streamClients = [];
+    }
+
+    function writeMjpegClient(c, payload) {
+        if (!c || c.closed) return;
+        c.busy = true;
+        c.lastSendTime = Date.now();
+        try {
+            c.res.write(payload, function () {
+                c.busy = false;
+                c.lastWriteOk = Date.now();
+            });
+        } catch (e) {
+            c.busy = false;
+            removeStreamClient(c);
+        }
+    }
+
+    function broadcastFrame(frame) {
+        if (!frame || frame.length === 0) return;
+        var now = Date.now();
+        lastFrame = frame;
+        lastFrameTime = now;
+        if (streamClients.length === 0) return;
+        var partHdr = asciiBuf('--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ' + frame.length + '\r\n\r\n');
+        var payload = Buffer.concat([partHdr, frame, asciiBuf('\r\n')]);
+        for (var i = streamClients.length - 1; i >= 0; i--) {
+            var c = streamClients[i];
+            if (!c || c.closed || !c.res || !c.res.socket || !c.res.socket.writable || c.res.finished) {
+                removeStreamClient(c);
+                continue;
+            }
+            if (isClientReady(c)) {
+                writeMjpegClient(c, payload);
+            } else if ((now - c.lastWriteOk) > 15000) {
+                try { c.res.end(); } catch (e) {}
+                try { c.res.socket.destroy(); } catch (e) {}
+                removeStreamClient(c);
+            }
+        }
+    }
+
+    function connectStreamTcp() {
+        if (streamTcpSocket || streamConnecting || streamClients.length === 0 || !streamProcRunning) return;
+        streamConnecting = true;
+
+        var sock;
+        try {
+            sock = net.connect(18888, '127.0.0.1');
+        } catch (e) {
+            streamConnecting = false;
+            return;
+        }
+        streamTcpSocket = sock;
+        if (sock.setNoDelay) sock.setNoDelay(true);
+        var parser = createJpegParser(broadcastFrame);
+
+        sock.on('connect', function () {
+            try {
+                streamConnecting = false;
+                if (!streamProcRunning || streamTcpSocket !== sock || streamClients.length === 0) {
+                    try { sock.destroy(); } catch (e) {}
+                    return;
+                }
+                streamRetryCount = 0;
+                streamPipelineRestarts = 0;
+                if (streamRetryTimer) {
+                    clearTimeout(streamRetryTimer);
+                    streamRetryTimer = null;
+                }
+            } catch (e) {}
+        });
+
+        sock.on('data', parser);
+
+        function handleDisconnect() {
+            try {
+                if (streamTcpSocket === sock) streamTcpSocket = null;
+                streamConnecting = false;
+                try { sock.destroy(); } catch (e) {}
+                if (streamClients.length > 0 && streamProcRunning && !streamRetryTimer) {
+                    streamRetryTimer = setTimeout(function () {
+                        streamRetryTimer = null;
+                        try {
+                            if (streamClients.length === 0 || !streamProcRunning) return;
+                            streamRetryCount++;
+                            if (streamRetryCount <= 5) {
+                                connectStreamTcp();
+                            } else if (streamPipelineRestarts < 2) {
+                                streamRetryCount = 0;
+                                streamPipelineRestarts++;
+                                streamProcRunning = false;
+                                startStreamPipeline();
+                            } else {
+                                stopStreamPipeline();
+                                closeAllStreamClients();
+                            }
+                        } catch (e) {}
+                    }, 350);
+                }
+            } catch (e) {}
+        }
+
+        sock.on('error', handleDisconnect);
+        sock.on('close', handleDisconnect);
+    }
+
+    function startStreamPipeline() {
+        if (streamProcRunning) {
+            if (!streamTcpSocket && !streamConnecting && !streamConnectTimer && !streamRetryTimer) {
+                connectStreamTcp();
+            }
+            return;
+        }
+        streamProcRunning = true;
+        var gstCmd = STOP_STREAM_CMD + "; " +
+            "WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run gst-launch-1.0 -q waylandsrc ! " +
+            "video/x-raw,width=1920,height=1080 ! " +
+            "videoscale method=0 n-threads=2 ! video/x-raw,width=960,height=540 ! " +
+            "videoconvert n-threads=2 ! " +
+            "jpegenc quality=55 idct-method=1 ! " +
+            "tcpserversink host=127.0.0.1 port=18888 sync=false </dev/null >/dev/null 2>&1 & " +
+            "echo $! > " + STREAM_PID_FILE;
+        try {
+            ctx.execute(gstCmd, 5000).then(function (r) {
+                try {
+                    if (!streamProcRunning) {
+                        ctx.execute(STOP_STREAM_CMD, 2000).catch(function () {});
+                        return;
+                    }
+                    if (r && r.exit_code !== 0) {
+                        stopStreamPipeline();
+                        closeAllStreamClients();
+                    }
+                } catch (e) {}
+            }, function () {
+                try {
+                    stopStreamPipeline();
+                    closeAllStreamClients();
+                } catch (e) {}
+            });
+        } catch (e) {
+            stopStreamPipeline();
+            closeAllStreamClients();
+        }
+        if (streamConnectTimer) clearTimeout(streamConnectTimer);
+        streamConnectTimer = setTimeout(function () {
+            streamConnectTimer = null;
+            try {
+                connectStreamTcp();
+            } catch (e) {}
+        }, 250);
+    }
+
+    function stopStreamPipeline() {
+        var wasRunning = streamProcRunning;
+        streamProcRunning = false;
+        streamConnecting = false;
+        streamRetryCount = 0;
+        streamPipelineRestarts = 0;
+        lastFrame = null;
+        lastFrameTime = 0;
+        if (streamKillTimer) {
+            clearTimeout(streamKillTimer);
+            streamKillTimer = null;
+        }
+        if (streamConnectTimer) {
+            clearTimeout(streamConnectTimer);
+            streamConnectTimer = null;
+        }
+        if (streamRetryTimer) {
+            clearTimeout(streamRetryTimer);
+            streamRetryTimer = null;
+        }
+        if (streamTcpSocket) {
+            var s = streamTcpSocket;
+            streamTcpSocket = null;
+            try { s.destroy(); } catch (e) {}
+        }
+        if (wasRunning) {
+            try {
+                ctx.execute(STOP_STREAM_CMD, 2000).catch(function () {});
+            } catch (e) {}
+        }
+    }
+
+    function takeShotWaiters(key) {
+        var list = screenshotWaiters[key];
+        delete screenshotWaiters[key];
+        return list || [];
+    }
+
+    function finishShotOk(key, contentType, data) {
+        var list = takeShotWaiters(key);
+        for (var i = 0; i < list.length; i++) {
+            var r = list[i];
+            if (!r || r.finished) continue;
+            try {
+                r.writeHead(200, {
+                    'content-type': contentType,
+                    'cache-control': 'no-store, must-revalidate',
+                    'content-length': data.length
+                });
+                r.end(data);
+            } catch (e) {}
+        }
+    }
+
+    function finishShotErr(key, msg) {
+        var list = takeShotWaiters(key);
+        var body = JSON.stringify({ ok: false, error: msg || 'Screenshot capture failed' });
+        for (var i = 0; i < list.length; i++) {
+            var r = list[i];
+            if (!r || r.finished) continue;
+            try {
+                r.writeHead(500, { 'content-type': 'application/json' });
+                r.end(body);
+            } catch (e) {}
+        }
+    }
+
+    function clearScreenshotWaiters() {
+        var keys = Object.keys(screenshotWaiters);
+        for (var i = 0; i < keys.length; i++) {
+            finishShotErr(keys[i], 'Shard stopped');
+        }
+    }
+
+    function readAndServeShot(key, filePath, contentType) {
+        fs.readFile(filePath, function (err, data) {
+            unlinkFile(filePath);
+            if (err) {
+                finishShotErr(key, err.message);
+                return;
+            }
+            finishShotOk(key, contentType, data);
+        });
+    }
+
+    function runScreenshotCapture(key, shotQual, isScaled) {
+        var shotId = Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+        var shotPath = '/tmp/shot_' + shotId + '.jpg';
+        var shotFallbackPath = '/tmp/shot_' + shotId + '.png';
+        var scalePart = isScaled ? ' ! videoscale method=0 ! video/x-raw,width=960,height=540' : '';
+        var gstCmd = "WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run gst-launch-1.0 -q waylandsrc num-buffers=1 ! video/x-raw,width=1920,height=1080" + scalePart + " ! videoconvert ! jpegenc quality=" + shotQual + " ! filesink location='" + shotPath + "'";
+        var dbusCmd = "dbus-send --system --print-reply --dest=org.enlightenment.wm /org/enlightenment/wm org.enlightenment.wm.info.dump_screen string:'" + shotFallbackPath + "'";
+
+        function fallbackDbus() {
+            ctx.execute(dbusCmd, 10000).then(function (r) {
+                if (!r || r.exit_code !== 0) {
+                    unlinkFile(shotFallbackPath);
+                    finishShotErr(key, (r && r.stderr) || 'Screenshot capture failed');
+                    return;
+                }
+                readAndServeShot(key, shotFallbackPath, 'image/png');
+            }, function (e) {
+                unlinkFile(shotFallbackPath);
+                finishShotErr(key, e ? e.message : 'Screenshot capture failed');
+            });
+        }
+
+        ctx.execute(gstCmd, 5000).then(function (r) {
+            if (r && r.exit_code === 0) {
+                fs.stat(shotPath, function (err, stat) {
+                    if (!err && stat && stat.size > 1000) {
+                        readAndServeShot(key, shotPath, 'image/jpeg');
+                        return;
+                    }
+                    unlinkFile(shotPath);
+                    fallbackDbus();
+                });
+            } else {
+                unlinkFile(shotPath);
+                fallbackDbus();
+            }
+        }, function () {
+            unlinkFile(shotPath);
+            fallbackDbus();
+        });
+    }
+
     return {
         start: function () {
             page = loadPage(ctx);
@@ -284,6 +675,9 @@ module.exports = function (ctx) {
         stop: function () {
             stopHold();
             stopMouseHold();
+            closeAllStreamClients();
+            stopStreamPipeline();
+            clearScreenshotWaiters();
             page = null;
         },
 
@@ -557,38 +951,65 @@ module.exports = function (ctx) {
                 return true;
             }
 
-            // GET api/screenshot — captures 1080p frame buffer from Enlightenment WM
-            if (sub === 'screenshot' && req.method === 'GET') {
-                var shotId = Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
-                var shotPath = '/tmp/shot_' + shotId + '.png';
-                var shotCmd = "dbus-send --system --print-reply --dest=org.enlightenment.wm /org/enlightenment/wm org.enlightenment.wm.info.dump_screen string:'" + shotPath + "'";
-
-                ctx.execute(shotCmd, 10000).then(function (r) {
-                    if (r.exit_code !== 0) {
-                        unlinkFile(shotPath);
-                        res.writeHead(500, { 'content-type': 'application/json' });
-                        res.end(JSON.stringify({ ok: false, error: r.stderr || 'Screenshot capture failed' }));
-                        return;
-                    }
-                    fs.readFile(shotPath, function (err, data) {
-                        unlinkFile(shotPath);
-                        if (err) {
-                            res.writeHead(500, { 'content-type': 'application/json' });
-                            res.end(JSON.stringify({ ok: false, error: err.message }));
-                            return;
-                        }
-                        res.writeHead(200, {
-                            'content-type': 'image/png',
-                            'cache-control': 'no-store, must-revalidate',
-                            'content-length': data.length
-                        });
-                        res.end(data);
+            // GET api/stream — persistent low-latency MJPEG live stream with zero-backlog drop policy
+            if (sub === 'stream' && req.method === 'GET') {
+                if (streamClients.length >= MAX_STREAM_CLIENTS) {
+                    res.writeHead(503, {
+                        'content-type': 'application/json',
+                        'cache-control': 'no-store'
                     });
-                }, function (e) {
-                    unlinkFile(shotPath);
-                    res.writeHead(500, { 'content-type': 'application/json' });
-                    res.end(JSON.stringify({ ok: false, error: e.message }));
+                    res.end(JSON.stringify({ ok: false, error: 'too many stream viewers' }));
+                    return true;
+                }
+                res.writeHead(200, {
+                    'content-type': 'multipart/x-mixed-replace; boundary=--frame',
+                    'cache-control': 'no-cache, no-store, must-revalidate',
+                    'pragma': 'no-cache',
+                    'connection': 'close'
                 });
+                if (res.socket && res.socket.setNoDelay) res.socket.setNoDelay(true);
+                var client = {
+                    res: res,
+                    busy: false,
+                    lastSendTime: 0,
+                    lastWriteOk: Date.now(),
+                    closed: false
+                };
+                streamClients.push(client);
+                if (streamKillTimer) {
+                    clearTimeout(streamKillTimer);
+                    streamKillTimer = null;
+                }
+                startStreamPipeline();
+                if (lastFrame && (Date.now() - lastFrameTime < 1500)) {
+                    var initHdr = asciiBuf('--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ' + lastFrame.length + '\r\n\r\n');
+                    writeMjpegClient(client, Buffer.concat([initHdr, lastFrame, asciiBuf('\r\n')]));
+                }
+                var onDisconnect = function () {
+                    try {
+                        removeStreamClient(client);
+                    } catch (e) {}
+                };
+                req.on('close', onDisconnect);
+                req.on('error', onDisconnect);
+                res.on('close', onDisconnect);
+                res.on('error', onDisconnect);
+                return true;
+            }
+
+            // GET api/screenshot — captures crisp 1080p JPEG via Wayland (or Enlightenment WM PNG fallback)
+            if (sub === 'screenshot' && req.method === 'GET') {
+                var rawUrl = req.url || '';
+                var qMatch = /[?&]quality=(\d+)/.exec(rawUrl);
+                var shotQual = qMatch ? Math.max(20, Math.min(95, parseInt(qMatch[1], 10) || 85)) : 85;
+                var isScaled = rawUrl.indexOf('scale=1') !== -1;
+                var shotKey = shotQual + ':' + (isScaled ? '1' : '0');
+                if (screenshotWaiters[shotKey]) {
+                    screenshotWaiters[shotKey].push(res);
+                    return true;
+                }
+                screenshotWaiters[shotKey] = [res];
+                runScreenshotCapture(shotKey, shotQual, isScaled);
                 return true;
             }
 

@@ -14,7 +14,7 @@ Adds a unified **Keyboard** tab to the Vetro dashboard:
   - **Direct Remote & Editing Shortcuts:** Press <kbd>Enter</kbd> to send typed text (in input box) or submit focused field / URL bar (outside input box), <kbd>Ctrl+Enter</kbd> to send an `OK` (`Return`) click, <kbd>Ctrl+S</kbd> to open Search, <kbd>Ctrl+A</kbd> to Select All, <kbd>Ctrl+Z</kbd> to Undo, <kbd>Backspace</kbd> to delete on TV, <kbd>Escape</kbd> to go Back, <kbd>Home</kbd> to open TV Home, and <kbd>Arrow keys</kbd> to navigate.
   - **Dynamic Device Pairing Name:** Automatically identifies pairing requests on your TV screen by device and browser (e.g. `Vetro (Windows Chrome)`, `Vetro (Android Chrome)`) so you always know which device is connecting.
   - **Mobile On-Screen Keyboard Support:** In fullscreen theater mode (`#screen`), mobile devices keep the input box docked at the bottom so you can tap to summon the mobile virtual keyboard, while PC hides it to maximize 100% vertical screen space (with a `⌨ Input` toolbar button to toggle on/off at will).
-- **Interactive Live Screen Preview:** Expandable full-width 1080p TV display preview with direct pointer & gesture control:
+- **Interactive Live Screen Preview:** Expandable full-width 1080p TV display preview with fast single-shot JPEG snapshots, continuous low-latency live MJPEG streaming (`Live stream` toggle with automatic polling fallback), and direct pointer & gesture control:
   - **Pointer Mode (`🖱 Pointer`):** Tap to click, double-tap to double-click, press & hold, press & drag (for sliders, scrollbars, and text selection), right-click, `Move only` hover mode, and scroll wheel support across the entire `1920×1080` screen (browser chrome, tabs, URL bar, web pages, and pointer-enabled apps).
   - **D-Pad Mode (`🕹 D-Pad`):** Swipe or tap directional zones directly on the preview to navigate and select items in D-Pad-only apps that ignore mouse input (such as YouTube or Netflix).
 - **Navigation & D-Pad:** Full directional control (`Up`, `Down`, `Left`, `Right`, `OK`), `Home`, `Back`, `Menu`, `Info`, `Exit`.
@@ -33,7 +33,7 @@ Samsung Smart TVs handle text entry in two different ways depending on the app:
 
 ## Permissions
 
-`exec` — to run `/usr/bin/input_keyevent` for remote control keys and local text input, `/usr/bin/enlightenment_info` for mouse actions, and `dbus-send` (Enlightenment D-Bus) to capture frame buffer screenshots.
+`exec` — to run `/usr/bin/input_keyevent` for remote control keys and local text input, `/usr/bin/enlightenment_info` for mouse actions, `gst-launch-1.0` for Wayland live MJPEG stream and JPEG screenshot capture, `dbus-send` (Enlightenment D-Bus) for fallback screenshot capture, and `kill`/`rm` cleanup.
 
 ## Commands it runs
 
@@ -43,14 +43,18 @@ Samsung Smart TVs handle text entry in two different ways depending on the app:
 | `sh -c "/usr/bin/input_keyevent Control_L\|Shift_L down; /usr/bin/input_keyevent <keysym>; /usr/bin/input_keyevent Control_L\|Shift_L up"` | Sends modified key combinations (`Ctrl+A`, `Ctrl+Z`, shifted/uppercase keys) |
 | `sh -c '/usr/bin/input_keyevent ...; sleep 0.04; ...'` | Chains mapped ASCII key events (wrapping uppercase and shifted symbols in `Shift_L down/up`) with `sleep 0.04` between characters for local text typing |
 | `sh -c '/usr/bin/enlightenment_info -init_device --node=/dev/input/event<N>; /usr/bin/enlightenment_info -mousegen ...; /usr/bin/enlightenment_info -deinit_device'` | Provides native TV scroll wheel events and fallback cursor movement, clicks (`usleep 60000` for double-clicks), and drag/hold (with 6 s inactivity / 30 s max auto-release timeout) when WebSocket is unavailable |
-| `dbus-send --system --print-reply --dest=org.enlightenment.wm /org/enlightenment/wm org.enlightenment.wm.info.dump_screen string:'/tmp/shot_<id>.png'` | Captures a full-resolution 1080p frame buffer snapshot from the Enlightenment window manager into a unique temporary file, deleted immediately after reading |
-| `rm -f '/tmp/shot_<id>.png'` | Fallback cleanup as root when the Vetro service runs as a non-root user and cannot unlink a root-owned screenshot file in sticky `/tmp` |
+| `WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run gst-launch-1.0 -q waylandsrc ! video/x-raw,width=1920,height=1080 ! videoscale method=0 n-threads=2 ! video/x-raw,width=960,height=540 ! videoconvert n-threads=2 ! jpegenc quality=55 idct-method=1 ! tcpserversink host=127.0.0.1 port=18888 sync=false ... & echo $! > /tmp/vetro-keyboard-stream.pid` | Streams in-memory Wayland MJPEG frames over localhost loopback while live preview is open (automatic polling fallback if unavailable) |
+| `if [ -f /tmp/vetro-keyboard-stream.pid ]; then ... grep -q 'tcpserversink.*18888' && kill / kill -9 "$pid"; rm -f /tmp/vetro-keyboard-stream.pid; fi` | Stops only the tracked Wayland streaming pipeline (verified by `/proc/<pid>/cmdline`) once no viewers remain connected or when the Shard stops |
+| `WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run gst-launch-1.0 -q waylandsrc num-buffers=1 ... filesink location='/tmp/shot_<id>.jpg'` | Captures a fast single-shot `1920×1080` JPEG frame from the Wayland compositor into a unique temporary file, deleted immediately after reading |
+| `dbus-send --system --print-reply --dest=org.enlightenment.wm /org/enlightenment/wm org.enlightenment.wm.info.dump_screen string:'/tmp/shot_<id>.png'` | Automatic fallback 1080p PNG frame buffer snapshot from the Enlightenment window manager if Wayland GStreamer capture is unavailable |
+| `rm -f '/tmp/shot_<id>.jpg'` / `rm -f '/tmp/shot_<id>.png'` | Fallback cleanup as root when the Vetro service runs as a non-root user and cannot unlink a root-owned temporary screenshot file in sticky `/tmp` |
 
 ## Network
 
 | Host | Port | Protocol | Why |
 | --- | --- | --- | --- |
 | TV IP | `8002` | WSS (TLS, encrypted) | Samsung Remote WebSocket API (2019+ TVs) — injects full Unicode text in any language directly from the browser, and provides native hardware key press/release. Plaintext port 8001 is intentionally not used to prevent sending keystrokes or tokens unencrypted over the LAN. |
+| `127.0.0.1` | `18888` | TCP | Internal localhost loopback socket carrying JPEG frames from GStreamer to this Shard process (never exposed externally; all client streaming stays on Vetro's HTTP API route). |
 
 ## Data it keeps
 
@@ -59,7 +63,7 @@ Samsung Smart TVs handle text entry in two different ways depending on the app:
 ## Security & Privacy Notice
 
 - **Pairing Token (`GET api/token`):** Returns the saved Samsung Remote API token from `config.json`. While Vetro pairing is **off**, anyone who can reach Vetro's HTTP port on the LAN can call this route and keep the Samsung token; with Vetro pairing **on**, only paired devices with an active Shard session can call it. Note that turning Vetro pairing on later or removing this Shard only protects or deletes `config.json`—it does **not** revoke the grant already stored on the TV, so a copied token continues to work on port `8002` until you revoke the device in the TV's settings (**Settings → General → External Device Manager → Device Connection Manager → Device List**, or **Settings → Connection → External Device Manager → Device Connection Manager → Device List** on newer Tizen versions).
-- **Frame Buffer Capture (`GET api/screenshot`):** Captures and returns the TV's full `1920×1080` frame buffer. While Vetro pairing is **off**, anyone who can reach Vetro's HTTP port can call this route; with Vetro pairing **on**, only paired devices with an active Shard session can call it. The captured image includes running applications, browser contents, and any visible on-screen text or typed passwords. Temporary image files (`/tmp/shot_<id>.png`) are written with per-request unique names and unlinked from the TV disk immediately after reading.
+- **Frame Buffer Capture (`GET api/screenshot` & `GET api/stream`):** Captures and returns the TV's `1920×1080` single-shot or `960×540` live MJPEG graphics plane. While Vetro pairing is **off**, anyone who can reach Vetro's HTTP port can call these routes; with Vetro pairing **on**, only paired devices with an active Shard session can call them. The captured image/stream includes running applications, browser contents, and any visible on-screen text or typed passwords. Temporary single-shot files (`/tmp/shot_<id>.jpg` or fallback `/tmp/shot_<id>.png`) are written with per-request unique names and removed immediately after reading; live streaming stays in memory and stops automatically when viewers disconnect.
 - **Local Typing Execution (`POST api/type`):** Typing via the local TV shell command is capped at 200 characters and supports partial US ASCII (letters, numbers, standard symbols). Any unsupported characters are omitted with a warning. Full Unicode text (Arabic, Hebrew, Cyrillic, CJK, emoji, etc.) is handled via the encrypted WebSocket connection on port 8002.
 
 ## Screen Preview & Display Layers

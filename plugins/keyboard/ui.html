@@ -947,9 +947,9 @@ body.is-screen-only #only-theater-actions {
           <span id="dpad-tools" style="display:none;align-items:center;gap:6px">
             <button type="button" id="btn-preview-back" class="btn-mini" title="Send Back to TV">↩ Back</button>
           </span>
-          <label class="auto-refresh-label">
+          <label class="auto-refresh-label" title="Continuous low-latency live TV display">
             <input type="checkbox" id="chk-auto-refresh">
-            <span>Auto-refresh</span>
+            <span>Live stream</span>
           </label>
           <span id="screen-time" style="font-size:var(--fs-xs);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px;display:inline-block;vertical-align:middle"></span>
         </div>
@@ -2942,14 +2942,109 @@ if (screenFrame) {
   });
 }
 
+var streamFailCount = 0;
+var streamFallbackPolling = false;
+
+function startLiveStream() {
+  if (autoRefreshTimer) {
+    clearTimeout(autoRefreshTimer);
+    autoRefreshTimer = null;
+  }
+  screenCapturing = false;
+  streamFallbackPolling = false;
+  btnRefreshScreen.disabled = false;
+  btnRefreshScreen.textContent = "🔄 Reconnect";
+  screenTime.textContent = "🔴 Connecting live stream…";
+  screenImg.style.display = "block";
+  screenSpinner.style.display = "none";
+  if (screenFrame) screenFrame.classList.add("has-image");
+  hasScreenImage = true;
+
+  screenImg.onload = function () {
+    streamFailCount = 0;
+    var dim = (screenImg.naturalWidth && screenImg.naturalHeight) ? (screenImg.naturalWidth + "×" + screenImg.naturalHeight) : "";
+    screenTime.textContent = "🔴 Live stream" + (dim ? (" · " + dim) : "");
+    if (isScreenOnly) fitScreenFrame();
+  };
+  screenImg.onerror = function () {
+    if (!chkAutoRefresh || !chkAutoRefresh.checked) return;
+    if (document.hidden) return;
+    if (boxScreen.classList.contains("is-collapsed") && !isScreenOnly) return;
+    streamFailCount++;
+    if (streamFailCount < 2) {
+      screenTime.textContent = "Reconnecting live stream…";
+      autoRefreshTimer = setTimeout(startLiveStream, 1500);
+    } else {
+      streamFallbackPolling = true;
+      screenImg.onerror = null;
+      screenImg.onload = null;
+      screenTime.textContent = "Live fallback (polling)";
+      fetchScreenshot();
+    }
+  };
+  screenImg.src = "stream?t=" + Date.now();
+  if (isScreenOnly) fitScreenFrame();
+}
+
+function stopLiveStream(keepSnapshot) {
+  if (autoRefreshTimer) {
+    clearTimeout(autoRefreshTimer);
+    autoRefreshTimer = null;
+  }
+  streamFailCount = 0;
+  streamFallbackPolling = false;
+  btnRefreshScreen.disabled = false;
+  btnRefreshScreen.textContent = "🔄 Capture / Refresh";
+  screenImg.onerror = null;
+  screenImg.onload = null;
+  if (keepSnapshot && hasScreenImage) {
+    screenImg.src = "screenshot?t=" + Date.now();
+    screenTime.textContent = "Stream paused";
+  } else {
+    hasScreenImage = false;
+    screenImg.src = "";
+    screenImg.style.display = "none";
+    if (screenFrame) screenFrame.classList.remove("has-image");
+    if (!keepSnapshot) screenTime.textContent = "";
+  }
+}
+
+document.addEventListener("visibilitychange", function () {
+  if (!chkAutoRefresh || !chkAutoRefresh.checked) return;
+  if (document.hidden) {
+    if (autoRefreshTimer) {
+      clearTimeout(autoRefreshTimer);
+      autoRefreshTimer = null;
+    }
+    screenImg.onerror = null;
+    screenImg.onload = null;
+    screenImg.src = "";
+    screenTime.textContent = "Stream paused (tab hidden)";
+  } else if (!boxScreen.classList.contains("is-collapsed") || isScreenOnly) {
+    startLiveStream();
+  }
+});
+
+window.addEventListener("pagehide", function () {
+  if (chkAutoRefresh && chkAutoRefresh.checked) {
+    screenImg.onerror = null;
+    screenImg.onload = null;
+    screenImg.src = "";
+  }
+});
+
 function fetchScreenshot() {
+  if (chkAutoRefresh && chkAutoRefresh.checked && !streamFallbackPolling) {
+    startLiveStream();
+    return;
+  }
   if (screenCapturing) return;
   screenCapturing = true;
   if (!hasScreenImage) {
-    screenSpinner.textContent = "Capturing screen from TV…";
+    screenSpinner.textContent = "Capturing 1080p screen from TV…";
     screenSpinner.style.display = "block";
   } else {
-    screenTime.textContent = "Updating preview…";
+    screenTime.textContent = streamFallbackPolling ? "Live fallback (polling)" : "Capturing 1080p…";
   }
   btnRefreshScreen.disabled = true;
   btnRefreshScreen.textContent = "⏳ Capturing…";
@@ -2957,21 +3052,27 @@ function fetchScreenshot() {
   var img = new Image();
   var url = "screenshot?t=" + Date.now();
   img.onload = function () {
+    streamFailCount = 0;
     hasScreenImage = true;
+    screenImg.onerror = null;
+    screenImg.onload = null;
     screenImg.src = url;
     screenImg.style.display = "block";
     if (screenFrame) screenFrame.classList.add("has-image");
     screenSpinner.style.display = "none";
     screenCapturing = false;
     btnRefreshScreen.disabled = false;
-    btnRefreshScreen.textContent = "🔄 Capture / Refresh";
+    btnRefreshScreen.textContent = (chkAutoRefresh && chkAutoRefresh.checked) ? "🔄 Reconnect" : "🔄 Capture / Refresh";
     var d = new Date();
     var pad = function (n) { return (n < 10 ? "0" : "") + n; };
-    screenTime.textContent = "Captured at " + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+    var resLabel = (img.naturalWidth && img.naturalHeight) ? (img.naturalWidth + "×" + img.naturalHeight + " ") : "";
+    screenTime.textContent = streamFallbackPolling
+      ? ("Live fallback · " + resLabel + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds()))
+      : ("Captured " + resLabel + "at " + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds()));
     if (isScreenOnly) fitScreenFrame();
 
-    if (chkAutoRefresh && chkAutoRefresh.checked && (!boxScreen.classList.contains("is-collapsed") || isScreenOnly)) {
-      autoRefreshTimer = setTimeout(fetchScreenshot, 3500);
+    if (chkAutoRefresh && chkAutoRefresh.checked && streamFallbackPolling && (!boxScreen.classList.contains("is-collapsed") || isScreenOnly) && !document.hidden) {
+      autoRefreshTimer = setTimeout(fetchScreenshot, 2500);
     }
   };
   img.onerror = function () {
@@ -2982,10 +3083,10 @@ function fetchScreenshot() {
     }
     screenCapturing = false;
     btnRefreshScreen.disabled = false;
-    btnRefreshScreen.textContent = "🔄 Capture / Refresh";
+    btnRefreshScreen.textContent = (chkAutoRefresh && chkAutoRefresh.checked) ? "🔄 Reconnect" : "🔄 Capture / Refresh";
 
-    if (chkAutoRefresh && chkAutoRefresh.checked && (!boxScreen.classList.contains("is-collapsed") || isScreenOnly)) {
-      autoRefreshTimer = setTimeout(fetchScreenshot, 5000);
+    if (chkAutoRefresh && chkAutoRefresh.checked && streamFallbackPolling && (!boxScreen.classList.contains("is-collapsed") || isScreenOnly) && !document.hidden) {
+      autoRefreshTimer = setTimeout(fetchScreenshot, 4000);
     }
   };
   img.src = url;
@@ -2996,14 +3097,16 @@ function toggleScreenCollapse(e) {
   var collapsed = boxScreen.classList.toggle("is-collapsed");
   btnToggleScreen.setAttribute("aria-expanded", collapsed ? "false" : "true");
   if (collapsed) {
-    if (autoRefreshTimer) {
+    if (chkAutoRefresh && chkAutoRefresh.checked) {
+      stopLiveStream(false);
+    } else if (autoRefreshTimer) {
       clearTimeout(autoRefreshTimer);
       autoRefreshTimer = null;
     }
   } else {
-    if (!hasScreenImage) {
-      fetchScreenshot();
-    } else if (chkAutoRefresh && chkAutoRefresh.checked && !screenCapturing) {
+    if (chkAutoRefresh && chkAutoRefresh.checked) {
+      startLiveStream();
+    } else if (!hasScreenImage) {
       fetchScreenshot();
     }
   }
@@ -3026,15 +3129,20 @@ if (btnToggleScreen && boxScreen) {
 if (chkAutoRefresh) {
   chkAutoRefresh.onchange = function () {
     if (chkAutoRefresh.checked) {
-      if (!screenCapturing) fetchScreenshot();
+      startLiveStream();
     } else {
-      if (autoRefreshTimer) clearTimeout(autoRefreshTimer);
+      stopLiveStream(true);
     }
   };
 }
 
 btnRefreshScreen.onclick = function () {
-  fetchScreenshot();
+  if (chkAutoRefresh && chkAutoRefresh.checked) {
+    streamFailCount = 0;
+    startLiveStream();
+  } else {
+    fetchScreenshot();
+  }
 };
 
 if (!isTouch) {
