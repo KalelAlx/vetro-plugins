@@ -2,6 +2,8 @@
 var fs = require('fs'), path = require('path');
 var fields = require('./controls.json');
 function valid(f, v) {
+    if (f.type === 'toggle') return typeof v === 'boolean';
+    if (f.type === 'color') return typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v);
     if (f.options) return typeof v === 'string' && Object.prototype.hasOwnProperty.call(f.options,v);
     if (f.type === 'ipv4') return typeof v === 'string' && /^(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/.test(v);
     if (f.choices) return f.choices.indexOf(v) >= 0;
@@ -11,6 +13,12 @@ module.exports = function(ctx, status) {
     function load() {
         var old = ctx.config.get() || {}, values = {};
         fields.forEach(function(f){ values[f.key] = valid(f,old[f.key]) ? old[f.key] : f.default; });
+        if (old.TopCount === undefined) {
+            var total=values.Leds, ends=[0,172,269,441,538];
+            ['Top','Right','Bottom','Left'].forEach(function(side,i){
+                values[side+'Count']=Math.round(total*ends[i+1]/538)-Math.round(total*ends[i]/538);
+            });
+        }
         return values;
     }
     var discovery;
@@ -39,12 +47,17 @@ module.exports = function(ctx, status) {
             return true;
         }
         if (sub === 'preview' && req.method === 'GET') {
-            var preview = '', file = '/tmp/ambilight-studio-preview';
-            try {
-                if (Date.now() - fs.statSync(file).mtime.getTime() < 3500)
-                    preview = fs.readFileSync(file,'utf8');
-            } catch (_) {}
-            json(res,{rgb:preview});
+            // The capture service and the dashboard can have separate /tmp mounts.
+            // Read in the same execution context used for capture statistics.
+            var readPreview = 'file=/tmp/ambilight-studio-preview; ' +
+                'if [ -r "$file" ]; then modified=$(stat -c %Y "$file") || exit 1; ' +
+                'age=$(($(date +%s)-modified)); ' +
+                'if [ "$age" -ge 0 ] && [ "$age" -lt 4 ]; then cat "$file"; fi; fi';
+            ctx.execute(readPreview,2000).then(function(result){
+                if (result.exit_code || result.timed_out) return json(res,{error:'Preview read failed'},503);
+                var rgb = (result.stdout || '').trim();
+                json(res,{rgb:/^[A-Za-z0-9+/]{192}$/.test(rgb) ? rgb : ''});
+            },function(){json(res,{error:'Preview unavailable'},503);});
             return true;
         }
         if (sub === 'live' && req.method === 'GET') { json(res,status());return true; }
@@ -80,7 +93,22 @@ module.exports = function(ctx, status) {
                     if (!f || !valid(f,patch[k]))throw Error('Invalid setting: '+k);
                     next[k]=patch[k];
                 });
-                ctx.config.set(next);current=next;json(res,{values:current});
+                next.Leds=next.TopCount+next.RightCount+next.BottomCount+next.LeftCount;
+                if(next.Leds<1 || next.Leds>4096) throw Error('The four sides must total 1 to 4096 LEDs.');
+                function save(){ctx.config.set(next);current=next;json(res,{values:current});}
+                if(next.Lighting==='audio' && (current.Lighting!=='audio' || current.Wled!==next.Wled)){
+                    var target='http://'+next.Wled;
+                    ctx.execute('curl -fsS --max-time 3 '+target+'/json/eff',4000).then(function(result){
+                        var names=JSON.parse(result.stdout);
+                        var effect=names.indexOf('Freqwave');
+                        if(effect<0) throw Error('This WLED controller does not advertise the Freqwave audio effect.');
+                        var body=JSON.stringify({on:true,lor:0,seg:[{id:0,on:true,fx:effect}]});
+                        return ctx.execute("curl -fsS --max-time 3 -H 'Content-Type: application/json' --data '"+body+"' "+target+'/json/state',4000);
+                    }).then(function(result){
+                        if(result.exit_code || result.timed_out || !JSON.parse(result.stdout).success) throw Error('WLED refused audio sync');
+                        save();
+                    }).catch(function(e){json(res,{error:e.message},400);});
+                } else save();
             } catch(e){json(res,{error:e.message},400);}
         });
         return true;

@@ -30,11 +30,24 @@ internal sealed class Tuning
     [DataMember(IsRequired=true)] public int Leds = 538;
     [DataMember(IsRequired=true)] public int Zones = 512;
     [DataMember(IsRequired=true)] public string ZonesMode = "match";
-    public int EffectiveZones { get { return ZonesMode=="match" ? Leds : Zones; } }
+    [DataMember] public string Lighting = "screen";
+    [DataMember] public string Protocol = "ddp";
+    [DataMember] public string Tint = "#ff8844";
+    [DataMember] public int Period = 4;
+    [DataMember] public bool? Top;
+    [DataMember] public bool? Right;
+    [DataMember] public bool? Bottom;
+    [DataMember] public bool? Left;
+    [DataMember] public int TopCount = 172;
+    [DataMember] public int RightCount = 97;
+    [DataMember] public int BottomCount = 172;
+    [DataMember] public int LeftCount = 97;
+    public int ManualRgb;
+    public int EffectiveZones { get { return ZonesMode=="match" ? Math.Min(538,Leds) : Zones; } }
     [DataMember(IsRequired=true)] public string StartCorner = "bottom-left";
     private byte[] redCurve, greenCurve, blueCurve;
     private static string lastJson;
-    private static readonly string ConfigFile = Path.Combine(AppContext.BaseDirectory,"config.json");
+    private static readonly string ConfigFile = Path.Combine(Path.GetDirectoryName(typeof(Tuning).Assembly.Location),"config.json");
     public static Tuning Read(Tuning previous)
     {
         try {
@@ -43,7 +56,11 @@ internal sealed class Tuning
             using(var stream=new MemoryStream(Encoding.UTF8.GetBytes(json))) {
                 var serializer=new DataContractJsonSerializer(typeof(Tuning));
                 var t=(Tuning)serializer.ReadObject(stream);
-                if (t.SendHz<5 || t.CaptureHz<5 || t.Depth<4 || t.Offset<0 || t.Offset>537 || t.Leds<1 || t.Leds>538 || t.Zones<4 || t.Zones>512 || (t.ZonesMode!="match" && t.ZonesMode!="custom") || string.IsNullOrEmpty(t.Wled)) return previous;
+                if (t.SendHz<5 || t.CaptureHz<5 || t.Depth<4 || t.Offset<0 || t.Offset>4095 || t.Leds<1 || t.Leds>4096 || t.Zones<4 || t.Zones>512 || (t.ZonesMode!="match" && t.ZonesMode!="custom") || string.IsNullOrEmpty(t.Wled)) return previous;
+                if (t.TopCount+t.RightCount+t.BottomCount+t.LeftCount != t.Leds) return previous;
+                if (String.IsNullOrEmpty(t.Lighting)) t.Lighting="screen";
+                t.Period=Math.Max(1,Math.Min(20,t.Period));
+                if (t.Tint!=null && t.Tint.Length==7) Int32.TryParse(t.Tint.Substring(1),System.Globalization.NumberStyles.HexNumber,null,out t.ManualRgb);
                 t.redCurve=t.Curve(t.Red); t.greenCurve=t.Curve(t.Green); t.blueCurve=t.Curve(t.Blue);
                 lastJson=json;
                 return t;

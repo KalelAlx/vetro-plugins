@@ -1,7 +1,7 @@
 'use strict';
 module.exports = function(ctx) {
     var fs = require('fs'), path = require('path'), detail = {}, timer, busy = false, active = false, captureEnabled = true;
-    var unit = 'vetro-ambilight-colour.service';
+    var unit = 'vetro-ambilight-studio.service';
     var hdrFile = path.join(ctx.dir,'hdr-state'), recoveryFile = path.join(ctx.dir,'picture-recovery-until'), hdrTimer, readingHdr = false;
     function readHdr() {
         if (readingHdr || !active) return;
@@ -18,7 +18,7 @@ module.exports = function(ctx) {
         if (busy || !active || !captureEnabled) return;
         busy = true;
         var exe = path.join(ctx.dir,'Colour.exe');
-        var command = 'if ! systemctl is-active --quiet '+unit+'; then systemctl reset-failed '+unit+' 2>/dev/null; systemd-run --unit=vetro-ambilight-colour /usr/bin/dotnet '+exe+'; fi; systemctl is-active '+unit+'; cat /tmp/ambilight538-capture-rate 2>/dev/null || true';
+        var command = 'if ! systemctl is-active --quiet '+unit+'; then systemctl reset-failed '+unit+' 2>/dev/null; systemd-run --unit=vetro-ambilight-studio /usr/bin/dotnet '+exe+'; fi; systemctl is-active '+unit+'; cat /tmp/ambilight-studio-rate 2>/dev/null || true';
         ctx.execute(command,8000).then(function(r){detail=r; if(!active) return ctx.execute('systemctl stop '+unit,5000);}).catch(function(e){detail={error:e.message};}).then(function(){busy=false;});
     }
     var settingsRoute = require("./settings.js")(ctx,function(){return detail;});

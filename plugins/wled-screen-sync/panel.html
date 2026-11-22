@@ -18,14 +18,15 @@ input[type=range]{min-width:50px;flex:1;accent-color:#bc9aff}input[type=number]{
 button.primary,nav button[aria-pressed=true]{background:#d5bcff;color:#21132e;border-color:transparent;font-weight:650}
 button:disabled{opacity:.5;cursor:default}footer{position:sticky;bottom:0;background:#101017f5;padding:14px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere}
 @media(max-width:620px){.row{grid-template-columns:1fr}section{padding:15px}.metrics strong{font-size:1.2rem}}
+.row{padding:18px 0}.inputs:has(input[type=range]){display:grid;grid-template-columns:minmax(0,1fr) 5em auto;gap:10px}.inputs input[type=range]{width:100%;min-width:0;padding:0;margin:0;border:0}.inputs input[type=number]{width:100%}nav{margin:16px 0;gap:10px}footer{margin-top:18px}#view{margin:8px 12px}input[type=checkbox]{width:22px;height:22px;accent-color:#bc9aff}
 </style>
 <main><header><h1>Ambilight Studio</h1><p id="status" role="status">Connecting…</p></header>
 <section class="capture"><h2>Strip output</h2><canvas id="strip" width="768" height="38" aria-label="48 color samples in physical strip order"></canvas>
 <small id="previewState">Waiting for output…</small>
 <div class="metrics"><div><small>Active zones</small><strong id="zones">—</strong></div><div><small>Scans / sec</small><strong id="fps">—</strong></div><div><small>Changes / sec</small><strong id="changes">—</strong></div></div>
 <div class="actions"><button type="button" data-action="start">Start</button><button type="button" data-action="stop">Stop</button><button type="button" data-action="restart">Restart capture</button><span id="captureMsg" role="status"></span></div></section>
-<details><summary>Capture diagnostics</summary><pre id="diagnostics">Waiting for capture…</pre></details>
-<nav id="tabs" aria-label="Settings groups"></nav>
+<details id="diagnosticsPanel" hidden><summary>Capture diagnostics</summary><pre id="diagnostics">Waiting for capture…</pre></details>
+<label>Settings view <select id="view"><option value="simple">Simple</option><option value="advanced">Advanced</option></select></label><nav id="tabs" aria-label="Settings groups"></nav>
 <form id="form"><div id="groups"></div>
 <footer><button type="button" class="primary" id="apply" disabled>Apply settings</button><button type="button" id="defaults" disabled>Restore defaults</button><span role="status" id="msg"></span></footer></form></main>
 <script>
@@ -34,9 +35,9 @@ var fields=[], saved={}, inputs={}, pending=false;
 var el=function(id){return document.getElementById(id)};
 function request(url,opts){return fetch(url,opts).then(function(r){return r.json().then(function(d){if(!r.ok)throw Error(d.error||'Request failed');return d;});});}
 function node(tag,parent,txt){var n=document.createElement(tag);parent.appendChild(n);if(txt!==undefined)n.textContent=txt;return n;}
-function values(){var d={};fields.forEach(function(f){d[f.key]=f.options||f.type==='ipv4'?inputs[f.key].main.value:Number(inputs[f.key].main.value);});return d;}
+function values(){var d={};fields.forEach(function(f){d[f.key]=f.type==='toggle'?inputs[f.key].main.checked:f.options||f.type==='color'||f.type==='ipv4'?inputs[f.key].main.value:Number(inputs[f.key].main.value);});return d;}
 function change(){var v=values();var dirty=fields.some(function(f){return saved[f.key]!==v[f.key];});el('apply').disabled=!dirty||pending;el('msg').textContent=dirty?'Unsaved changes':'';}
-function fill(d){fields.forEach(function(f){var i=inputs[f.key];i.main.value=d[f.key];if(i.range)i.range.value=d[f.key];});change();}
+function fill(d){fields.forEach(function(f){var i=inputs[f.key];if(f.type==='toggle')i.main.checked=d[f.key];else i.main.value=d[f.key];if(i.range)i.range.value=d[f.key];});change();}
 function draw(data){
  fields=data.fields.filter(function(f){return !f.hidden;});saved=data.values;var sections={};
  fields.forEach(function(f){
@@ -50,15 +51,39 @@ function draw(data){
    };}
   var row=node('div',section);row.className='row';var left=node('div',row),label=node('label',left,f.label);label.htmlFor=f.key;
   if(f.hint)node('small',left,f.hint);var right=node('div',row);right.className='inputs';var i={};inputs[f.key]=i;
-  if(f.type==='ipv4'){i.main=node('input',right);i.main.type='text';i.main.inputMode='decimal';i.main.autocomplete='off';i.main.pattern='(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])(?:\\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])){3}';i.main.required=true;}
-  else if(f.options||f.choices){i.main=node('select',right);(f.choices||Object.keys(f.options)).forEach(function(k){var o=node('option',i.main,f.options?f.options[k]:k);o.value=k;});}
+  if(f.type==='count'){i.main=node('input',right);i.main.type='number';i.main.min=f.min;i.main.max=f.max;i.main.required=true;}
+  else if(f.type==='toggle'){i.main=node('input',right);i.main.type='checkbox';}
+  else if(f.type==='color'){i.main=node('input',right);i.main.type='color';}
+  else if(f.type==='ipv4'){i.main=node('input',right);i.main.type='text';i.main.inputMode='decimal';i.main.autocomplete='off';i.main.pattern='(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])(?:\\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])){3}';i.main.required=true;}
+  else if(f.options||f.choices){i.main=node('select',right);(f.choices||Object.keys(f.options)).forEach(function(k){var parent=i.main;
+    if(f.key==='Lighting'){
+     var label=['screen','audio','solid'].indexOf(k)>=0?'Main modes':'Effects';
+     var group=i.main.lastElementChild;
+     if(!group||group.label!==label){group=node('optgroup',i.main);group.label=label;}
+     parent=group;
+    }
+    var o=node('option',parent,f.options?f.options[k]:k);o.value=k;});}
   else{i.range=node('input',right);i.range.type='range';i.range.setAttribute('aria-label',f.label);i.main=node('input',right);i.main.type='number';i.main.required=true;
    [i.range,i.main].forEach(function(n){n.min=f.min;n.max=f.max;n.step=1;});i.range.oninput=function(){i.main.value=i.range.value;change();};
    node('span',right,f.unit).className='unit';
   }
   if(f.key==='Wled') addDiscovery(right,i.main);
   i.main.id=f.key;i.main.oninput=i.main.onchange=function(){if(i.range)i.range.value=i.main.value;change();};
- });fill(saved);el('defaults').disabled=false;
+ });
+ var basic=['Lighting','Tint','Period','Wled','Brightness','Smooth'];
+ function setView(){
+  var simple=el('view').value==='simple';
+  el('diagnosticsPanel').hidden=simple;
+  el('tabs').style.display=simple?'none':'';
+  fields.forEach(function(f){inputs[f.key].main.closest('.row').style.display=simple&&basic.indexOf(f.key)<0?'none':'';});
+  Object.keys(sections).forEach(function(group,index){
+   sections[group].hidden=simple?!fields.some(function(f){return f.group===group&&basic.indexOf(f.key)>=0;}):index!==0;
+   el('tabs').children[index].setAttribute('aria-pressed',String(index===0));
+  });
+  try{localStorage.setItem('studioView',el('view').value);}catch(e){}
+ }
+ try{if(localStorage.getItem('studioView')==='advanced')el('view').value='advanced';}catch(e){}
+ el('view').onchange=setView;setView();fill(saved);el('defaults').disabled=false;
 }
 function addDiscovery(parent,input){
  var search=node('button',parent,'Find WLED controllers'), results=node('div',parent);
@@ -103,7 +128,7 @@ function preview(){
  request('preview').then(function(data){
   ctx.clearRect(0,0,768,38);
   var rgb=atob(data.rgb||'');
-  if(rgb.length!==144){el('previewState').textContent='No recent output';return;}
+  if(rgb.length!==144){el('previewState').textContent=saved.Lighting==='audio'?'Audio sync runs on WLED':'No recent output';return;}
   for(var i=0;i<48;i++){
    ctx.fillStyle='rgb('+rgb.charCodeAt(3*i)+','+rgb.charCodeAt(3*i+1)+','+rgb.charCodeAt(3*i+2)+')';
    ctx.fillRect(i*16,0,16,38);

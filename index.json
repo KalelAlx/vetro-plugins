@@ -145,15 +145,15 @@
     {
       "id": "wled-screen-sync",
       "name": "Ambilight Studio",
-      "version": "0.2.0",
+      "version": "0.3.3",
       "author": "KalelAlx",
       "description": "Discovers WLED controllers on the local network and syncs TV colors to the selected controller over DDP.",
       "permissions": [
         "exec"
       ],
-      "url": "dist/wled-screen-sync-0.2.0.vplugin",
-      "sha256": "ae0c760014bc5dd6bbaaa762cbdf9fb1514fe2b147e5549c965a2176c71792a9",
-      "size": 154630
+      "url": "dist/wled-screen-sync-0.3.3.vplugin",
+      "sha256": "4bd9c30918bd2447fa3ba1df669ef6dd13893284f72b8afefff095309117201b",
+      "size": 168841
     },
     {
       "id": "youtube",

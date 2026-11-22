@@ -1,5 +1,48 @@
 [
  {
+  "group": "Lighting",
+  "key": "Lighting",
+  "label": "Output mode",
+  "default": "screen",
+  "options": {
+   "screen": "Screen sync",
+   "audio": "Audio sync",
+   "solid": "Solid",
+   "twinkle": "Twinkle",
+   "wave": "Rolling wave",
+   "spark": "Fireflies",
+   "breathe": "Breathe",
+   "chase": "Comet trail"
+  },
+  "hint": "Audio sync uses the WLED controller\u2019s audio input or audio-sync receiver. TV strip preview and side masking apply to TV-generated output."
+ },
+ {
+  "group": "Lighting",
+  "key": "Tint",
+  "label": "Manual color",
+  "type": "color",
+  "default": "#ff8844"
+ },
+ {
+  "group": "Lighting",
+  "key": "Period",
+  "label": "Effect cycle",
+  "default": 4,
+  "min": 1,
+  "max": 20,
+  "unit": "s"
+ },
+ {
+  "group": "WLED target",
+  "key": "Protocol",
+  "label": "Receiver protocol",
+  "default": "ddp",
+  "options": {
+   "ddp": "DDP \u00b7 RGB",
+   "dnrgb": "WLED UDP \u00b7 DNRGB"
+  }
+ },
+ {
   "group": "Color",
   "key": "Hdr",
   "label": "HDR decoding",
@@ -190,7 +233,7 @@
   "label": "LED start offset",
   "default": 0,
   "min": 0,
-  "max": 537,
+  "max": 4095,
   "unit": "LEDs"
  },
  {
@@ -209,8 +252,9 @@
   "label": "LEDs on controller",
   "default": 538,
   "min": 1,
-  "max": 538,
+  "max": 4096,
   "unit": "LEDs",
+  "hint": "Number of addressable RGB pixels on the receiver.",
   "hidden": true
  },
  {
@@ -222,7 +266,7 @@
    "match": "Match WLED LEDs",
    "custom": "Choose custom count"
   },
-  "hint": "Match uses the configured WLED LED count."
+  "hint": "Match uses up to 538 sampled zones, distributed over the strip."
  },
  {
   "group": "Sampling",
@@ -252,5 +296,73 @@
    "bottom-right": "Bottom right",
    "bottom-left": "Bottom left"
   }
+ },
+ {
+  "group": "Strip sides",
+  "key": "Top",
+  "label": "Top edge",
+  "type": "toggle",
+  "default": true
+ },
+ {
+  "group": "Strip sides",
+  "key": "TopCount",
+  "label": "Top LED count",
+  "default": 172,
+  "min": 0,
+  "max": 4096,
+  "unit": "LEDs",
+  "type": "count"
+ },
+ {
+  "group": "Strip sides",
+  "key": "Right",
+  "label": "Right edge",
+  "type": "toggle",
+  "default": true
+ },
+ {
+  "group": "Strip sides",
+  "key": "RightCount",
+  "label": "Right LED count",
+  "default": 97,
+  "min": 0,
+  "max": 4096,
+  "unit": "LEDs",
+  "type": "count"
+ },
+ {
+  "group": "Strip sides",
+  "key": "Bottom",
+  "label": "Bottom edge",
+  "type": "toggle",
+  "default": true
+ },
+ {
+  "group": "Strip sides",
+  "key": "BottomCount",
+  "label": "Bottom LED count",
+  "default": 172,
+  "min": 0,
+  "max": 4096,
+  "unit": "LEDs",
+  "type": "count"
+ },
+ {
+  "group": "Strip sides",
+  "key": "Left",
+  "label": "Left edge",
+  "type": "toggle",
+  "default": true
+ },
+ {
+  "group": "Strip sides",
+  "key": "LeftCount",
+  "label": "Left LED count",
+  "default": 97,
+  "min": 0,
+  "max": 4096,
+  "unit": "LEDs",
+  "type": "count"
  }
 ]

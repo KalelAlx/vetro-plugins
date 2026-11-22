@@ -536,6 +536,7 @@ internal static class WledAmbiPpi
                 samplerOnly ? "Selected TV sampler" : frameStatus, _slots, _sleepMs, scans / window.Elapsed.TotalSeconds, changed / window.Elapsed.TotalSeconds, full ? (tuning.Bars=="both" || tuning.Bars=="rows" ? (double)PictureRows.Inset / pictureHeight : 0) : Rows.Inset, full ? (tuning.Bars=="both" || tuning.Bars=="columns" ? (double)PictureColumns.Inset / pictureWidth : 0) : Columns.Inset, full ? tuning.EffectiveZones : tuning.Fallback, tuning.SendHz, planeMilliseconds/scans);
             status += String.Format(", plane errors {0}, fallback errors {1}, longest read {2:F0} ms, UDP errors {3}",
                 planeErrors, fallbackErrors, longestReadMs, System.Threading.Interlocked.CompareExchange(ref udpErrors,0,0));
+            status += ", WLED " + tuning.Wled;
             status += ", TV input " + (haveSource ? sourceType.ToString() : "unknown") + ", capture reopens " + nativeReopens;
             status += full ? (hdr ? ", HDR10 PQ BT.2020" : ", SDR BT.709") : pictureRecovery ? ", trying full-picture recovery" : ", TV sampled RGB";
             status += ", saturation " + tuning.Saturation + "%, smoothing " + tuning.Smooth + " ms, sampling " + tuning.SampleMode;
@@ -544,7 +545,7 @@ internal static class WledAmbiPpi
             longestReadMs = 0;
             planeMilliseconds = 0;
             changed = 0;
-            try { System.IO.File.WriteAllText("/tmp/ambilight538-capture-rate", status); }
+            try { System.IO.File.WriteAllText("/tmp/ambilight-studio-rate", status); }
             catch (System.IO.IOException) {}
             scans = 0;
             window.Restart();
@@ -553,6 +554,7 @@ internal static class WledAmbiPpi
 
     private static int Main(string[] args)
     {
+        tuning = Tuning.Read(tuning);
         if (!PpiVeInit()) return 1;
         latest = new byte[LedCount * 3];
         var current = Array.ConvertAll(latest, value => (double)value);
@@ -565,11 +567,17 @@ internal static class WledAmbiPpi
         double next = 0;
         using (var udp = new UdpClient())
         {
-            string connectedTo = null;
+            System.Net.IPEndPoint endpoint = null;
+            string destination = null;
             while (true)
             {
                 double now = clock.Elapsed.TotalMilliseconds;
                 var config = tuning;
+                if (config.Lighting=="audio") {
+                    System.Threading.Thread.Sleep(100);
+                    next=previous=clock.Elapsed.TotalMilliseconds;
+                    continue;
+                }
                 double blend = config.Smooth==0 ? 1 : 1 - Math.Exp(-(now - previous) / config.Smooth);
                 previous = now;
                 var target = latest;
@@ -578,12 +586,14 @@ internal static class WledAmbiPpi
                     current[i] += (target[i] - current[i]) * blend;
                     pixels[i] = (byte)Math.Round(current[i]);
                 }
+                if (config.Lighting != "screen") RenderManual(pixels,config,now);
                 config.Apply(pixels);
-                if (connectedTo != config.Wled) { udp.Connect(System.Net.IPAddress.Parse(config.Wled),4048); connectedTo=config.Wled; }
+                int port = config.Protocol=="dnrgb" ? 21324 : 4048;
+                if (destination != config.Wled || endpoint.Port != port) { endpoint = new System.Net.IPEndPoint(System.Net.IPAddress.Parse(config.Wled),port); destination = config.Wled; }
                 try {
                     bool previewDue = now >= nextPreview;
                     byte[] preview = previewDue ? new byte[48 * 3] : null;
-                    SendDdp(udp, pixels, config, preview);
+                    SendDdp(udp, endpoint, pixels, config, preview);
                     if (previewDue) {
                         nextPreview = now + 1000;
                         try { System.IO.File.WriteAllText("/tmp/ambilight-studio-preview", Convert.ToBase64String(preview)); }
@@ -598,18 +608,48 @@ internal static class WledAmbiPpi
             }
         }
     }
+    private static void RenderManual(byte[] pixels,Tuning config,double now)
+    {
+        double phase = (now / (1000 * config.Period)) % 1;
+        double pulse = config.Lighting=="breathe" ? 0.5-0.5*Math.Cos(2*Math.PI*phase) : 1;
+        for (int i=0;i<LedCount;i++) {
+            double gain=pulse;
+            if(config.Lighting=="wave") gain=0.5+0.5*Math.Cos(2*Math.PI*(3.0*i/LedCount-phase));
+            if(config.Lighting=="twinkle" || config.Lighting=="spark") {
+                bool firefly=config.Lighting=="spark";
+                double t=now/(config.Period*(firefly?900.0:250.0));
+                int cell=firefly?i/6:i;
+                t+=(cell*0.61803398875)%1;
+                uint hash=unchecked((uint)(cell*374761393+(int)t*668265263));
+                hash=unchecked((hash^(hash>>13))*1274126177u);
+                double envelope=Math.Sin(Math.PI*(t-Math.Floor(t)));
+                gain=(hash%100 < (firefly?24:14)) ? envelope*envelope : 0.025;
+            }
+            if(config.Lighting=="chase") {
+                double distance=(phase-i/(double)LedCount+1)%1;
+                gain=Math.Max(0,1-5*distance);
+            }
+            for(int ch=0;ch<3;ch++) pixels[3*i+ch]=(byte)Math.Round(((config.ManualRgb>>(16-8*ch))&255)*gain);
+        }
+    }
     private static int udpErrors;
     private static byte sequence = 1;
 
-    private static void SendDdp(UdpClient udp, byte[] rgb, Tuning config, byte[] preview)
+    private static void SendDdp(UdpClient udp, System.Net.IPEndPoint endpoint, byte[] rgb, Tuning config, byte[] preview)
     {
         const int ChannelsPerPacket = 1440;
-        for (int offset = 0; offset < rgb.Length; offset += ChannelsPerPacket)
+        for (int offset = 0; offset < config.Leds * 3; offset += ChannelsPerPacket)
         {
             int count = Math.Min(ChannelsPerPacket, config.Leds * 3 - offset);
             if (count <= 0) break;
             bool last = offset + count == config.Leds * 3;
-            var packet = new byte[10 + count];
+            bool raw = config.Protocol=="dnrgb";
+            int header = raw ? 4 : 10;
+            var packet = new byte[header + count];
+            if(raw) {
+                packet[0]=4; packet[1]=2;
+                packet[2]=(byte)((offset/3)>>8); packet[3]=(byte)(offset/3);
+            } else {
             packet[0] = (byte)(last ? 0x41 : 0x40);
             packet[1] = sequence;
             sequence = (byte)(sequence % 15 + 1);
@@ -621,22 +661,31 @@ internal static class WledAmbiPpi
             packet[7] = (byte)offset;
             packet[8] = (byte)(count >> 8);
             packet[9] = (byte)count;
+            }
             // Start at the bottom-left, then travel up the left edge.
             int corner = config.StartCorner=="top-left" ? 0 :
-                config.StartCorner=="top-right" ? config.Leds*TopN/LedCount :
-                config.StartCorner=="bottom-right" ? config.Leds*(TopN+RightN)/LedCount :
-                config.Leds*(TopN+RightN+BottomN)/LedCount;
+                config.StartCorner=="top-right" ? config.TopCount :
+                config.StartCorner=="bottom-right" ? config.TopCount+config.RightCount :
+                config.Leds-config.LeftCount;
             int firstOutputLed = offset / 3;
             for(int j=0;j<count;j+=3) {
                 int sourceLed=(firstOutputLed+j/3)%config.Leds;
                 int logical=config.Direction=="reverse" ? (corner+config.Offset-sourceLed+config.Leds*2)%config.Leds : (corner+config.Offset+sourceLed)%config.Leds;
-                Buffer.BlockCopy(rgb,(logical * LedCount / config.Leds)*3,packet,10+j,3);
+                int position;
+                if (logical < config.TopCount) position=logical*TopN/config.TopCount;
+                else if ((logical-=config.TopCount) < config.RightCount) position=TopN+logical*RightN/config.RightCount;
+                else if ((logical-=config.RightCount) < config.BottomCount) position=TopN+RightN+logical*BottomN/config.BottomCount;
+                else position=TopN+RightN+BottomN+(logical-config.BottomCount)*LeftN/Math.Max(1,config.LeftCount);
+
+                bool? enabled = position < TopN ? config.Top : position < TopN + RightN ? config.Right :
+                    position < TopN + RightN + BottomN ? config.Bottom : config.Left;
+                if (enabled != false) Buffer.BlockCopy(rgb,position*3,packet,header+j,3);
             }
-            udp.Send(packet, packet.Length);
+            udp.Send(packet, packet.Length, endpoint);
             if (preview != null) {
                 for (int i = 0; i < preview.Length / 3; i++) {
                     int index = (i * config.Leds / (preview.Length / 3)) * 3 - offset;
-                    if (index >= 0 && index < count) Buffer.BlockCopy(packet, 10 + index, preview, i * 3, 3);
+                    if (index >= 0 && index < count) Buffer.BlockCopy(packet, header + index, preview, i * 3, 3);
                 }
             }
         }
