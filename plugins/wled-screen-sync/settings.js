@@ -40,14 +40,50 @@ module.exports = function(ctx, status, onModeChange) {
         }
         return values;
     }
-    var discovery;
+    var discovery, savedWledStates={};
+    function streamsAudioOrPicture(mode){return mode==='screen'||mode==='screen-audio'||mode==='tv-audio';}
+    function writeWled(address,state,callback){
+        httpPost(address,'/json/state',JSON.stringify(state),4000,function(error,code,body){
+            callback(!error&&code>=200&&code<300);
+        });
+    }
+    function restoreWled(address,callback){
+        var saved=savedWledStates[address];
+        if(!saved)return callback();
+        writeWled(address,saved,function(){delete savedWledStates[address];callback();});
+    }
+    function enterWled(address,callback){
+        if(address==='127.0.0.1')return callback();
+        if(savedWledStates[address])return writeWled(address,{on:true,seg:[{id:0,fx:0}]},function(){callback();});
+        httpGet(address,'/json/state',4000,function(error,code,body){
+            if(error||code<200||code>=300)return callback();
+            try{
+                var state=JSON.parse(body);
+                if(!state||!Array.isArray(state.seg)||!state.seg.length)return callback();
+                savedWledStates[address]={on:state.on,bri:state.bri,transition:0,seg:state.seg};
+            }catch(e){return callback();}
+            writeWled(address,{on:true,seg:[{id:0,fx:0}]},function(){callback();});
+        });
+    }
+    function switchWledOutput(previous,next,callback){
+        var wasStreaming=streamsAudioOrPicture(previous.Lighting), willStream=streamsAudioOrPicture(next.Lighting);
+        var targetChanged=previous.Wled!==next.Wled;
+        if(wasStreaming&&(!willStream||targetChanged))
+            return restoreWled(previous.Wled,function(){
+                if(willStream)enterWled(next.Wled,callback);else callback();
+            });
+        if(willStream&&(!wasStreaming||targetChanged))return enterWled(next.Wled,callback);
+        callback();
+    }
+
     var current = load();
     ctx.config.set(current);
+    if(streamsAudioOrPicture(current.Lighting))enterWled(current.Wled,function(){});
     function json(res,value,code) {
         res.writeHead(code || 200,{'Content-Type':'application/json','Cache-Control':'no-store'});
         res.end(JSON.stringify(value));
     }
-    return function(req,res,sub) {
+    var route=function(req,res,sub) {
         if (sub === 'ui' && req.method === 'GET') {
             res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'});
             res.end(fs.readFileSync(path.join(__dirname,'panel.html')));return true;
@@ -112,37 +148,41 @@ module.exports = function(ctx, status, onModeChange) {
                 next.Leds=next.TopCount+next.RightCount+next.BottomCount+next.LeftCount;
                 if(next.Leds<1 || next.Leds>4096) throw Error('The four sides must total 1 to 4096 LEDs.');
                 var save=function(){
-                    var previous=current.Lighting;
+                    var previous=current;
                     ctx.config.set(next);current=next;
-                    if(onModeChange)onModeChange(next.Lighting,previous);
+                    if(onModeChange)onModeChange(next.Lighting,previous.Lighting);
                     json(res,{values:current});
                 };
                 var modeSave=function(){
-                    if(next.Wled==='127.0.0.1'){
-                        save();return;
-                    }
-                    httpPost(next.Wled,'/json/state',JSON.stringify({on:true,seg:[{id:0,on:true,fx:0}]}),4000,function(error,code){
-                        save();
+                    var previous=current;
+                    var refreshCounts=function(){
+                        switchWledOutput(previous,next,save);
+                    };
+                    if(next.Wled===current.Wled)return refreshCounts();
+                    httpGet(next.Wled,'/json/info',4000,function(error,code,response){
+                        if(!error&&code>=200&&code<300){
+                            try{
+                                var info=JSON.parse(response), count=info.leds&&info.leds.count;
+                                if(count&&count===Math.floor(count)&&count>=1&&count<=4096){
+                                    next.Leds=count;
+                                    var ends=[0,172,269,441,538];
+                                    ['Top','Right','Bottom','Left'].forEach(function(side,i){
+                                        next[side+'Count']=Math.round(count*ends[i+1]/538)-Math.round(count*ends[i]/538);
+                                    });
+                                }
+                            }catch(e){}
+                        }
+                        refreshCounts();
                     });
                 };
-                if(next.Wled!==current.Wled){
-                    httpGet(next.Wled,'/json/info',4000,function(error,code,body){
-                        if(error||code<200||code>=300)return save();
-                        try{
-                            var info=JSON.parse(body), count=info.leds&&info.leds.count;
-                            if(count && count===Math.floor(count) && count>=1 && count<=4096){
-                                next.Leds=count;
-                                var ends=[0,172,269,441,538];
-                                ['Top','Right','Bottom','Left'].forEach(function(side,i){
-                                    next[side+'Count']=Math.round(count*ends[i+1]/538)-Math.round(count*ends[i]/538);
-                                });
-                            }
-                        }catch(e){}
-                        modeSave();
-                    });
-                } else modeSave();
+                modeSave();
             } catch(e){json(res,{error:e.message},400);}
         });
         return true;
     };
+    route.stop=function(callback){
+        if(streamsAudioOrPicture(current.Lighting))return restoreWled(current.Wled,callback);
+        callback();
+    };
+    return route;
 };

@@ -3,7 +3,7 @@ module.exports = function(ctx) {
     var fs = require('fs'), path = require('path'), detail = {}, timer, busy = false, active = false, captureEnabled = true;
     var unit = 'vetro-ambilight-studio.service';
     var runtimeDir = path.join(ctx.dir,'runtime');
-    var failures = 0, nextCheck = 0;
+    var failures = 0, nextCheck = 0, failedStarts = false;
     function quote(value){return "'"+String(value).replace(/'/g,"'\\''")+"'";}
     function ensureRuntimeDir(){
         if(fs.existsSync(runtimeDir)){
@@ -37,6 +37,7 @@ module.exports = function(ctx) {
     function check() {
         if (busy || !active) return;
         if(!captureEnabled) {
+            if(failedStarts) return;
             ctx.execute('systemctl stop '+unit,5000).catch(function(){});
             detail={stdout:'Capture stopped',state:'stopped'};
             return;
@@ -45,16 +46,22 @@ module.exports = function(ctx) {
         if(now<nextCheck) { detail={stdout:'Helper start backed off',state:'backoff'}; return; }
         busy = true;
         var exe = path.join(ctx.dir,'Colour.dll');
-        var command = 'if ! systemctl is-active --quiet '+unit+'; then systemctl reset-failed '+unit+' 2>/dev/null; systemd-run --unit='+unit+' /usr/bin/dotnet '+quote(exe)+' --status-dir '+quote(runtimeDir)+'; fi; systemctl is-active '+unit+'; true';
+        var command = 'if ! systemctl is-active --quiet '+unit+'; then systemctl reset-failed '+unit+' 2>/dev/null; systemd-run --unit='+unit+' /usr/bin/dotnet '+quote(exe)+' --status-dir '+quote(runtimeDir)+'; sleep 1; fi; printf "__VETRO_UNIT__"; systemctl is-active '+unit+' 2>/dev/null || true';
         ctx.execute(command,8000).then(function(r){
             if(!active || !captureEnabled) return ctx.execute('systemctl stop '+unit,5000);
-            if(r.exit_code===0){failures=0;detail=readRuntime();}else{
-                failures++; nextCheck=Date.now()+Math.min(60000,5000*Math.pow(2,Math.min(failures,4)));
-                detail={stdout:'Helper unavailable; start retry backed off',state:'backoff',exit_code:r.exit_code};
+            var unitState=((r.stdout||'').split('__VETRO_UNIT__')[1]||'').split(/\r?\n/)[0].trim();
+            if(r.exit_code===0 && unitState==='active'){failures=0;detail=readRuntime();}
+            else{
+                failures++; nextCheck=Date.now()+Math.min(60000,5000*Math.pow(2,failures-1));
+                if(failures>=5){
+                    failedStarts=true;captureEnabled=false;
+                    detail={stdout:'Capture helper failed to start after five attempts. Press Start to retry.',state:'failed'};
+                } else detail={stdout:'Helper unavailable; retry '+(failures+1)+' of 5 delayed',state:'backoff',exit_code:r.exit_code};
             }
         }).catch(function(e){
-            failures++; nextCheck=Date.now()+Math.min(60000,5000*Math.pow(2,Math.min(failures,4)));
-            detail={error:e.message,state:'backoff'};
+            failures++; nextCheck=Date.now()+Math.min(60000,5000*Math.pow(2,failures-1));
+            if(failures>=5){failedStarts=true;captureEnabled=false;detail={stdout:'Capture helper failed to start after five attempts. Press Start to retry.',state:'failed'};}
+            else detail={error:e.message,state:'backoff'};
         }).then(function(){busy=false;});
     }
     function syncMode(mode,previous){
@@ -82,22 +89,22 @@ module.exports = function(ctx) {
                 if(size>128)throw Error('Invalid capture action');
                 var action=JSON.parse(body).action;
                 if(action==='stop'){
-                    captureEnabled=false;detail={stdout:'Capture stopped',state:'stopped'};
+                    captureEnabled=false;failedStarts=false;detail={stdout:'Capture stopped',state:'stopped'};
                     ctx.execute('systemctl stop '+unit+'; systemctl is-active '+unit+' 2>/dev/null || true',8000).then(function(){json(res,{ok:true,state:'stopped'});},function(e){json(res,{error:e.message},500);});
                 } else if(action==='start'){
                     if(!active)throw Error('Enable the Ambilight Shard first');
-                    captureEnabled=true;
+                    captureEnabled=true;failedStarts=false;failures=0;nextCheck=0;
                     var exe=path.join(ctx.dir,'Colour.dll');
                     ctx.execute('if ! systemctl is-active --quiet '+unit+'; then systemctl reset-failed '+unit+' 2>/dev/null; systemd-run --unit='+unit+' /usr/bin/dotnet '+quote(exe)+' --status-dir '+quote(runtimeDir)+'; fi; systemctl is-active '+unit,10000)
-                        .then(function(r){json(res,{ok:r.exit_code===0,state:r.stdout.trim()});},function(e){json(res,{error:e.message},500);});
+                        .then(function(r){json(res,{ok:r.exit_code===0,state:(r.stdout||'').trim()});},function(e){json(res,{error:e.message},500);});
                 } else if(action==='restart'){
                     if(!active)throw Error('Enable the Ambilight Shard first');
-                    captureEnabled=true;
+                    captureEnabled=true;failedStarts=false;failures=0;nextCheck=0;
                     fs.writeFileSync(recoveryFile+'.tmp',String(Date.now()+8000));
                     fs.renameSync(recoveryFile+'.tmp',recoveryFile);
                     var exe=path.join(ctx.dir,'Colour.dll');
                     ctx.execute('if systemctl is-active --quiet '+unit+'; then systemctl restart '+unit+'; else systemctl reset-failed '+unit+' 2>/dev/null; systemd-run --unit='+unit+' /usr/bin/dotnet '+quote(exe)+' --status-dir '+quote(runtimeDir)+'; fi; systemctl is-active '+unit,12000)
-                        .then(function(r){json(res,{ok:r.exit_code===0,state:r.stdout.trim(),pictureRecoveryMs:8000});},function(e){json(res,{error:e.message},500);});
+                        .then(function(r){json(res,{ok:r.exit_code===0,state:(r.stdout||'').trim(),pictureRecoveryMs:8000});},function(e){json(res,{error:e.message},500);});
                 } else throw Error('Unknown capture action');
             } catch(e){json(res,{error:e.message},400);}
         });
@@ -108,9 +115,10 @@ module.exports = function(ctx) {
         writeAsset('Colour.dll',new Buffer(fs.readFileSync(path.join(__dirname,'payload.b64'),'utf8'),'base64'));
         writeAsset('Colour.runtimeconfig.json',fs.readFileSync(path.join(__dirname,'Colour.runtimeconfig.json'),'utf8'));
         writeAsset('Colour.deps.json',fs.readFileSync(path.join(__dirname,'Colour.deps.json'),'utf8'));
-        active=true;captureEnabled=true;failures=0;nextCheck=0;readHdr();hdrTimer=setInterval(readHdr,2000);check();timer=setInterval(check,5000);
+        active=true;captureEnabled=true;failures=0;nextCheck=0;failedStarts=false;readHdr();hdrTimer=setInterval(readHdr,2000);check();timer=setInterval(check,5000);
     },stop:function(){
         active=false;captureEnabled=false;clearInterval(timer);clearInterval(hdrTimer);
-        return ctx.execute('systemctl stop '+unit,5000).catch(function(){});
+        var stopService=ctx.execute('systemctl stop '+unit,5000).catch(function(){});
+        return stopService.then(function(){return new Promise(function(resolve){settingsRoute.stop(resolve);});});
     },status:function(){if(detail&&Object.prototype.hasOwnProperty.call(detail,'stdout'))return detail;return readRuntime();}};
 };

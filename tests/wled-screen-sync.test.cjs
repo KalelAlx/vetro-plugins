@@ -26,3 +26,17 @@ test('WLED helper has platform and 32-bit native guards', () => {
     assert.match(colour,/IntPtr\.Size!=4/);
     assert.match(plane,/IntPtr\.Size != 4/);
 });
+
+test('helper start failures back off and stop after five attempts', () => {
+    const source = fs.readFileSync(path.join(root,'plugins/wled-screen-sync/index.js'),'utf8');
+    assert(source.includes("unitState==='active'"));
+    assert(source.includes('failures>=5'));
+    assert(source.includes('Press Start to retry'));
+});
+
+test('leaving a WLED streaming mode restores the saved controller state', () => {
+    const source = fs.readFileSync(path.join(root,'plugins/wled-screen-sync/settings.js'),'utf8');
+    assert(source.includes('savedWledStates[address]'));
+    assert(source.includes('restoreWled(previous.Wled'));
+    assert(source.includes('route.stop=function(callback)'));
+});

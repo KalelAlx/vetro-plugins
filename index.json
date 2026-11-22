@@ -145,15 +145,15 @@
     {
       "id": "wled-screen-sync",
       "name": "Ambilight Studio",
-      "version": "0.6.0",
+      "version": "0.6.1",
       "author": "KalelAlx",
       "description": "Discovers WLED controllers and syncs TV picture or TV audio to the selected controller.",
       "permissions": [
         "exec"
       ],
-      "url": "dist/wled-screen-sync-0.6.0.vplugin",
-      "sha256": "d1677e6a488e7c5468b2caf144ff110510423976572a10ef82c7dca3fd1ce2eb",
-      "size": 199882
+      "url": "dist/wled-screen-sync-0.6.1.vplugin",
+      "sha256": "69a6bd9cb800ee5292238c1e055e571f89df2109375336847a3b69565b8b53b9",
+      "size": 203463
     },
     {
       "id": "youtube",

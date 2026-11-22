@@ -14,7 +14,7 @@ Color accent picks the depth sample with the strongest chroma. Highlight picks t
 
 ## Output and strip layout
 
-Simple view provides daily lighting controls. Advanced view adds capture diagnostics and per-side LED counts and switches. Output supports 1–4096 RGB pixels over DDP or WLED DNRGB. Screen sync samples up to 538 zones.
+Simple view provides daily lighting controls. Advanced view adds capture diagnostics and per-side LED counts and switches. Output supports 1–4096 RGB pixels over DDP or WLED DNRGB. Screen sync samples up to 538 zones. The prior WLED segment state is saved before streaming begins and restored when the shard leaves streaming mode or stops.
 
 The available modes are Screen sync, Screen + TV audio, and TV audio sync. TV audio sync captures the TV PCM output locally and generates reactive LED colors. Screen + TV audio combines picture and live audio by changing intensity only; it never replaces screen colors with an audio palette. Audio sampling offers impact/peaks, balanced, and music/rhythm profiles.
 
@@ -26,7 +26,7 @@ The available modes are Screen sync, Screen + TV audio, and TV audio sync. TV au
 - `arecord` captures TV audio from the TV PCM dump device `hw:0,5` for TV audio sync.
 - WLED HTTP `/json/info` uses port 80 without a shell command. UDP output uses DDP port 4048 or WLED DNRGB port 21324.
 - The helper runs as root and reads the video plane through Samsung private libraries (`libvideo-capture`, `libvideoenhance`) plus vconf `memory/system/source_type`.
-- The helper is 32-bit-only. It refuses 64-bit runtimes before native pointer access.
+- The helper is 32-bit-only. It refuses 64-bit runtimes before native pointer access. If startup fails, Vetro retries with backoff and gives up after five attempts until Start is pressed again.
 - Runtime files are kept below this Shard's private `runtime/` directory: `rate.txt`, `preview.b64`, and HDR state. The directory is 0700 and symlinks are refused.
 
 ## Building the helper
