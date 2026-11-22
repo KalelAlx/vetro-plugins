@@ -13,6 +13,7 @@ module.exports = function(ctx, status) {
         fields.forEach(function(f){ values[f.key] = valid(f,old[f.key]) ? old[f.key] : f.default; });
         return values;
     }
+    var discovery;
     var current = load();
     ctx.config.set(current);
     function json(res,value,code) {
@@ -27,6 +28,24 @@ module.exports = function(ctx, status) {
         if (sub === 'settings' && req.method === 'GET') {
             current=load();
             json(res,{fields:fields,values:current});return true;
+        }
+        if (sub === 'discover' && req.method === 'POST') {
+            if (!discovery) discovery = require('./discover')().then(function(devices) {
+                discovery = null;
+                return devices;
+            }, function(error) { discovery = null; throw error; });
+            discovery.then(function(devices) { json(res,{devices:devices}); },
+                function(error) { json(res,{error:error.message},503); });
+            return true;
+        }
+        if (sub === 'preview' && req.method === 'GET') {
+            var preview = '', file = '/tmp/ambilight-studio-preview';
+            try {
+                if (Date.now() - fs.statSync(file).mtime.getTime() < 3500)
+                    preview = fs.readFileSync(file,'utf8');
+            } catch (_) {}
+            json(res,{rgb:preview});
+            return true;
         }
         if (sub === 'live' && req.method === 'GET') { json(res,status());return true; }
         if (sub === 'wled-probe' && req.method === 'POST') {

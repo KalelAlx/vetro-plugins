@@ -136,8 +136,12 @@ internal static class WledAmbiPpi
                 }
             }
             if (base_ + cnt == n || fallbackInitialized) {
-                latest = MapRegions(rgb, counts);
-                if(tuning.SampleMode=="whole") ApplyWholeStrip(latest);
+                var mapped = MapRegions(rgb, counts);
+                if(tuning.SampleMode=="whole") ApplyWholeStrip(mapped);
+                if(tuning.SampleMode=="side") ApplySides(mapped);
+                if(tuning.SampleMode=="accent" || tuning.SampleMode=="highlight")
+                    SelectSideSamples(mapped, tuning.SampleMode=="accent");
+                latest = mapped;
             }
         }
         fallbackInitialized = true;
@@ -312,6 +316,7 @@ internal static class WledAmbiPpi
             int src = (i * tuning.EffectiveZones / LedCount) * 3;
             pixels[3*i]=zoneColors[src];pixels[3*i+1]=zoneColors[src+1];pixels[3*i+2]=zoneColors[src+2];
         }
+        if(tuning.SampleMode=="side") ApplySides(pixels);
         latest = pixels;
         frameStatus = frame.W + "x" + frame.H + " video plane";
         return true;
@@ -319,6 +324,18 @@ internal static class WledAmbiPpi
 
     private static void AggregateSamples(int[] ys,int[] us,int[] vs,out int y,out int u,out int v)
     {
+        bool accent = tuning.SampleMode == "accent";
+        if (accent || tuning.SampleMode == "highlight")
+        {
+            int best = 0, bestScore = -1;
+            for (int i = 0; i < ys.Length; i++) {
+                int cb = us[i] - 128, cr = vs[i] - 128;
+                int score = accent ? cb * cb + cr * cr : ys[i];
+                if (score > bestScore) { bestScore = score; best = i; }
+            }
+            y = ys[best] * 4; u = us[best] * 4; v = vs[best] * 4;
+            return;
+        }
         if(tuning.SampleMode=="edge" || tuning.SampleMode=="inner")
         {
             int i=tuning.SampleMode=="edge"?0:3;
@@ -348,6 +365,38 @@ internal static class WledAmbiPpi
         int low=Math.Min(Math.Min(a,b),Math.Min(c,d));
         int high=Math.Max(Math.Max(a,b),Math.Max(c,d));
         return (a+b+c+d-low-high+1)/2;
+    }
+
+    private static readonly int[] SideLengths = { TopN, RightN, BottomN, LeftN };
+    // The fallback sampler has one depth per spot. Choose among spots on each side.
+    private static void SelectSideSamples(byte[] pixels, bool accent)
+    {
+        int start = 0;
+        foreach (int length in SideLengths) {
+            int best = start, bestScore = -1;
+            for (int i = start; i < start + length; i++) {
+                int r = pixels[3*i], g = pixels[3*i+1], b = pixels[3*i+2];
+                int score = accent ? Math.Max(r, Math.Max(g,b)) - Math.Min(r, Math.Min(g,b))
+                                   : 54*r + 183*g + 19*b;
+                if (score > bestScore) { bestScore = score; best = i; }
+            }
+            for (int i = start; i < start + length; i++)
+                Buffer.BlockCopy(pixels, 3*best, pixels, 3*i, 3);
+            start += length;
+        }
+    }
+    private static void ApplySides(byte[] pixels)
+    {
+        int start = 0;
+        foreach (int length in SideLengths) {
+            for (int channel = 0; channel < 3; channel++) {
+                int total = 0;
+                for (int i = start; i < start + length; i++) total += pixels[3*i + channel];
+                byte average = (byte)((total + length / 2) / length);
+                for (int i = start; i < start + length; i++) pixels[3*i + channel] = average;
+            }
+            start += length;
+        }
     }
 
     private static void ApplyWholeStrip(byte[] pixels)
@@ -511,6 +560,7 @@ internal static class WledAmbiPpi
         capture.Start();
         var pixels = new byte[current.Length];
         var clock = Stopwatch.StartNew();
+        double nextPreview = 0;
         double previous = 0;
         double next = 0;
         using (var udp = new UdpClient())
@@ -530,7 +580,16 @@ internal static class WledAmbiPpi
                 }
                 config.Apply(pixels);
                 if (connectedTo != config.Wled) { udp.Connect(System.Net.IPAddress.Parse(config.Wled),4048); connectedTo=config.Wled; }
-                try { SendDdp(udp, pixels, config); }
+                try {
+                    bool previewDue = now >= nextPreview;
+                    byte[] preview = previewDue ? new byte[48 * 3] : null;
+                    SendDdp(udp, pixels, config, preview);
+                    if (previewDue) {
+                        nextPreview = now + 1000;
+                        try { System.IO.File.WriteAllText("/tmp/ambilight-studio-preview", Convert.ToBase64String(preview)); }
+                        catch (System.IO.IOException) { }
+                    }
+                }
                 catch (SocketException) { System.Threading.Interlocked.Increment(ref udpErrors); }
                 next += 1000.0 / config.SendHz;
                 double remaining = next - clock.Elapsed.TotalMilliseconds;
@@ -542,14 +601,14 @@ internal static class WledAmbiPpi
     private static int udpErrors;
     private static byte sequence = 1;
 
-    private static void SendDdp(UdpClient udp, byte[] rgb, Tuning config)
+    private static void SendDdp(UdpClient udp, byte[] rgb, Tuning config, byte[] preview)
     {
         const int ChannelsPerPacket = 1440;
         for (int offset = 0; offset < rgb.Length; offset += ChannelsPerPacket)
         {
             int count = Math.Min(ChannelsPerPacket, config.Leds * 3 - offset);
             if (count <= 0) break;
-            bool last = offset + count == rgb.Length;
+            bool last = offset + count == config.Leds * 3;
             var packet = new byte[10 + count];
             packet[0] = (byte)(last ? 0x41 : 0x40);
             packet[1] = sequence;
@@ -571,9 +630,15 @@ internal static class WledAmbiPpi
             for(int j=0;j<count;j+=3) {
                 int sourceLed=(firstOutputLed+j/3)%config.Leds;
                 int logical=config.Direction=="reverse" ? (corner+config.Offset-sourceLed+config.Leds*2)%config.Leds : (corner+config.Offset+sourceLed)%config.Leds;
-                Buffer.BlockCopy(rgb,logical*3,packet,10+j,3);
+                Buffer.BlockCopy(rgb,(logical * LedCount / config.Leds)*3,packet,10+j,3);
             }
             udp.Send(packet, packet.Length);
+            if (preview != null) {
+                for (int i = 0; i < preview.Length / 3; i++) {
+                    int index = (i * config.Leds / (preview.Length / 3)) * 3 - offset;
+                    if (index >= 0 && index < count) Buffer.BlockCopy(packet, 10 + index, preview, i * 3, 3);
+                }
+            }
         }
     }
 

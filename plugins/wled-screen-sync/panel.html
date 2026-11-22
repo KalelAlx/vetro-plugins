@@ -1,22 +1,31 @@
 <!doctype html>
 <html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Ambilight tuning</title>
+<title>Ambilight Studio</title>
 <style>
-:root{color-scheme:dark;font-family:Inter,system-ui,sans-serif;background:#101719;color:#edf3f1}
-*{box-sizing:border-box}body{margin:0}main{max-width:850px;margin:auto;padding:clamp(16px,4vw,40px)}
-h1{font-size:clamp(28px,4vw,42px);margin:0 0 .2em;letter-spacing:-.035em}h2{font-size:1.2rem;margin:0 0 6px}
-#status{margin:0 0 20px;color:#a8c9bf;line-height:1.6}section{background:#182225;border:1px solid #334443;border-radius:14px;padding:18px 22px;margin:12px 0}
-.row{display:grid;grid-template-columns:minmax(140px,1fr) minmax(170px,1fr);gap:8px 24px;align-items:center;padding:13px 0}.row+.row{border-top:1px solid #32403f}
-label{font-weight:600}small{display:block;color:#b4c2bf;line-height:1.45;margin-top:4px}.inputs{display:flex;align-items:center;gap:8px}
-input[type=range]{min-width:50px;width:100%;accent-color:#82dcc1}input[type=number]{width:5em}
-input[type=number],select,button{background:#10191b;color:inherit;border:1px solid #536761;border-radius:7px;padding:8px;font:inherit}
-select{width:100%}.actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.capture{margin-bottom:16px}#captureMsg{color:#b4c2bf}.unit{font-size:12px;color:#bccbc7;white-space:nowrap}
-footer{position:sticky;bottom:0;background:#101719f5;padding:12px 0;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-button{cursor:pointer}button.primary{background:#94e1c4;color:#142921;border-color:transparent;font-weight:650}button:disabled{opacity:.5;cursor:default}#msg{font-size:.92em;color:#c1d2cd}
-@media(max-width:570px){.row{grid-template-columns:1fr}section{padding:15px}footer{gap:6px}}
+:root{color-scheme:dark;font-family:Inter,system-ui,sans-serif;background:#101017;color:#f5f2fb}
+*{box-sizing:border-box}body{margin:0}main{max-width:1000px;margin:auto;padding:clamp(18px,4vw,42px)}
+header{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}
+h1{font-size:clamp(32px,5vw,54px);letter-spacing:-.055em;margin:0}h2{font-size:1.05rem;margin:0 0 10px}
+section,details{background:#1a1924;border:1px solid #383443;border-radius:16px;padding:20px;margin:14px 0}
+.capture{background:linear-gradient(125deg,#29203c,#1c1c2b);padding:24px}
+.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:20px 0}.metrics strong{font:600 1.6rem system-ui;display:block}
+canvas{width:100%;height:38px;background:#100f17;border-radius:8px;display:block;margin:10px 0}
+.row{display:grid;grid-template-columns:minmax(140px,1fr) minmax(170px,1fr);gap:12px 26px;align-items:center;padding:14px 0}.row+.row{border-top:1px solid #35303f}
+label,summary{font-weight:600}summary{cursor:pointer}small,.unit,#status{color:#c0b7cf;line-height:1.45}small{display:block;margin-top:4px}
+.inputs,.actions,footer,nav{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+input,select,button{background:#211f2c;color:inherit;border:1px solid #524861;border-radius:8px;padding:9px;font:inherit}
+input[type=range]{min-width:50px;flex:1;accent-color:#bc9aff}input[type=number]{width:5em}select{max-width:100%}button{cursor:pointer}
+button.primary,nav button[aria-pressed=true]{background:#d5bcff;color:#21132e;border-color:transparent;font-weight:650}
+button:disabled{opacity:.5;cursor:default}footer{position:sticky;bottom:0;background:#101017f5;padding:14px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere}
+@media(max-width:620px){.row{grid-template-columns:1fr}section{padding:15px}.metrics strong{font-size:1.2rem}}
 </style>
-<main><h1>Ambilight tuning</h1><p id="status">Reading capture status…</p>
-<section class="capture"><h2>Capture</h2><div class="actions"><button type="button" data-action="start">Start</button><button type="button" data-action="stop">Stop</button><button type="button" data-action="restart">Restart</button><span id="captureMsg" role="status"></span></div><small>Restart restores full-picture capture, matches 538 zones to WLED, targets 60 FPS, and delays fallback for 8 seconds.</small></section>
+<main><header><h1>Ambilight Studio</h1><p id="status" role="status">Connecting…</p></header>
+<section class="capture"><h2>Strip output</h2><canvas id="strip" width="768" height="38" aria-label="48 color samples in physical strip order"></canvas>
+<small id="previewState">Waiting for output…</small>
+<div class="metrics"><div><small>Active zones</small><strong id="zones">—</strong></div><div><small>Scans / sec</small><strong id="fps">—</strong></div><div><small>Changes / sec</small><strong id="changes">—</strong></div></div>
+<div class="actions"><button type="button" data-action="start">Start</button><button type="button" data-action="stop">Stop</button><button type="button" data-action="restart">Restart capture</button><span id="captureMsg" role="status"></span></div></section>
+<details><summary>Capture diagnostics</summary><pre id="diagnostics">Waiting for capture…</pre></details>
+<nav id="tabs" aria-label="Settings groups"></nav>
 <form id="form"><div id="groups"></div>
 <footer><button type="button" class="primary" id="apply" disabled>Apply settings</button><button type="button" id="defaults" disabled>Restore defaults</button><span role="status" id="msg"></span></footer></form></main>
 <script>
@@ -31,7 +40,14 @@ function fill(d){fields.forEach(function(f){var i=inputs[f.key];i.main.value=d[f
 function draw(data){
  fields=data.fields.filter(function(f){return !f.hidden;});saved=data.values;var sections={};
  fields.forEach(function(f){
-  var section=sections[f.group];if(!section){section=node('section',el('groups'));sections[f.group]=section;node('h2',section,f.group);}
+  var section=sections[f.group];if(!section){section=node('section',el('groups'));sections[f.group]=section;node('h2',section,f.group);
+   var tab=node('button',el('tabs'),f.group);
+   section.hidden=Object.keys(sections).length>1;
+   tab.setAttribute('aria-pressed',String(!section.hidden));
+   tab.onclick=function(){
+    Object.keys(sections).forEach(function(group){sections[group].hidden=group!==f.group;});
+    Array.prototype.forEach.call(el('tabs').children,function(t){t.setAttribute('aria-pressed',String(t===tab));});
+   };}
   var row=node('div',section);row.className='row';var left=node('div',row),label=node('label',left,f.label);label.htmlFor=f.key;
   if(f.hint)node('small',left,f.hint);var right=node('div',row);right.className='inputs';var i={};inputs[f.key]=i;
   if(f.type==='ipv4'){i.main=node('input',right);i.main.type='text';i.main.inputMode='decimal';i.main.autocomplete='off';i.main.pattern='(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])(?:\\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])){3}';i.main.required=true;}
@@ -39,9 +55,24 @@ function draw(data){
   else{i.range=node('input',right);i.range.type='range';i.range.setAttribute('aria-label',f.label);i.main=node('input',right);i.main.type='number';i.main.required=true;
    [i.range,i.main].forEach(function(n){n.min=f.min;n.max=f.max;n.step=1;});i.range.oninput=function(){i.main.value=i.range.value;change();};
    node('span',right,f.unit).className='unit';
-   if(f.key==='Wled'){var check=node('button',right,'Check WLED');check.type='button';check.onclick=function(){check.disabled=true;request('wled-probe',{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({address:i.main.value})}).then(function(d){el('msg').textContent=d.name+' · '+(d.leds||'?')+' LEDs · '+d.address;}).catch(function(e){el('msg').textContent=e.message;}).then(function(){check.disabled=false;});};}}
+  }
+  if(f.key==='Wled') addDiscovery(right,i.main);
   i.main.id=f.key;i.main.oninput=i.main.onchange=function(){if(i.range)i.range.value=i.main.value;change();};
  });fill(saved);el('defaults').disabled=false;
+}
+function addDiscovery(parent,input){
+ var search=node('button',parent,'Find WLED controllers'), results=node('div',parent);
+ search.type='button'; results.setAttribute('aria-live','polite');
+ search.onclick=function(){
+  search.disabled=true;results.textContent='Searching the local network…';
+  request('discover',{method:'POST'}).then(function(data){
+   results.textContent=data.devices.length?'':'No controllers advertised. Enter an IPv4 address manually.';
+   data.devices.forEach(function(device){
+    var pick=node('button',results,device.name+' · '+device.address);pick.type='button';
+    pick.onclick=function(){input.value=device.address;change();results.textContent='Selected '+device.name+'. Apply settings to use it.';};
+   });
+  }).catch(function(error){results.textContent=error.message;}).then(function(){search.disabled=false;});
+ };
 }
 el('defaults').onclick=function(){var d={};fields.forEach(function(f){d[f.key]=f.default;});fill(d);};
 el('apply').onclick=function(){if(pending||!el('form').reportValidity())return;var v=values(),patch={};fields.forEach(function(f){if(v[f.key]!==saved[f.key])patch[f.key]=v[f.key];});
@@ -52,13 +83,34 @@ document.querySelectorAll('[data-action]').forEach(function(button){button.oncli
  el('captureMsg').textContent=action==='stop'?'Stopping…':action==='start'?'Starting…':'Restarting…';
  request('capture-action',{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({action:action})})
  .then(function(result){
-  if(action==='restart')return request('settings').then(function(d){saved=d.values;fill(saved);el('captureMsg').textContent='Restarting · Auto picture attempt for '+Math.round(result.pictureRecoveryMs/1000)+' seconds';});
+  if(action==='restart'){el('captureMsg').textContent='Capture restarted';return;}
   el('captureMsg').textContent=action==='stop'?'Capture stopped':'Capture starting';
  }).then(function(){setTimeout(live,1200);})
  .catch(function(e){el('captureMsg').textContent=e.message;})
  .then(function(){setTimeout(function(){document.querySelectorAll('[data-action]').forEach(function(b){b.disabled=false;});},1200);});
 };});
-function live(){request('live').then(function(d){var s=d.stdout||'',z=s.match(/(\d+) regions/),fps=s.match(/capture ([\d.]+)\/s/);
- el('status').textContent=s.indexOf('Capture stopped')>=0?'Capture stopped':z&&fps?z[1]+' zones · '+fps[1]+' scans/s · '+(s.indexOf('TV sampled RGB')>=0?'TV color sampler':s.indexOf('HDR10 PQ')>=0?'HDR10 video':'SDR video'):'Waiting for capture…';}).catch(function(){el('status').textContent='Capture status unavailable';});}
+function metric(text,pattern,id){var match=text.match(pattern);el(id).textContent=match?match[1]:'—';}
+function live(){
+ request('live').then(function(data){
+  var text=data.stdout||'';
+  el('diagnostics').textContent=text||'Waiting for capture…';
+  metric(text,/(\d+) regions/,'zones');metric(text,/capture ([\d.]+)\/s/,'fps');metric(text,/changed ([\d.]+)\/s/,'changes');
+  el('status').textContent=text.indexOf('TV sampled RGB')>=0?'TV color sampler':text.indexOf('HDR10 PQ')>=0?'Full picture · HDR':text.indexOf('SDR BT.709')>=0?'Full picture · SDR':text.indexOf('stopped')>=0?'Stopped':'Waiting for capture…';
+ }).catch(function(){el('status').textContent='Capture status unavailable';});
+}
+function preview(){
+ var canvas=el('strip'),ctx=canvas.getContext('2d');
+ request('preview').then(function(data){
+  ctx.clearRect(0,0,768,38);
+  var rgb=atob(data.rgb||'');
+  if(rgb.length!==144){el('previewState').textContent='No recent output';return;}
+  for(var i=0;i<48;i++){
+   ctx.fillStyle='rgb('+rgb.charCodeAt(3*i)+','+rgb.charCodeAt(3*i+1)+','+rgb.charCodeAt(3*i+2)+')';
+   ctx.fillRect(i*16,0,16,38);
+  }
+  el('previewState').textContent='First LED → last LED · refreshed every second';
+ }).catch(function(){ctx.clearRect(0,0,768,38);el('previewState').textContent='Preview unavailable';}).then(function(){setTimeout(preview,1000);});
+}
+preview();
 request('settings').then(draw).catch(function(e){el('msg').textContent=e.message;});live();setInterval(live,5000);
 </script></html>

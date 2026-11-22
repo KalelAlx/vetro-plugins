@@ -159,9 +159,12 @@
    "median": "Median",
    "inner": "Inner edge",
    "weighted": "Edge-weighted",
-   "whole": "Whole-strip average"
+   "whole": "Whole-strip average",
+   "accent": "Color accent",
+   "highlight": "Highlight",
+   "side": "One color per side"
   },
-  "hint": "Outer edge samples the border. Four-point average blends four inward points. Median rejects one-off extremes. Inner edge samples farthest inward. Edge-weighted favors the border. Whole-strip average blends all sampled perimeter zones into one color."
+  "hint": "Accent selects the most colorful depth sample. Highlight selects the brightest. In fallback, Accent and Highlight pick one measured spot per side. One color per side averages the edge in either capture mode."
  },
  {
   "group": "Sampling",

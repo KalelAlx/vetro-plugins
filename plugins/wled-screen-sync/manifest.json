@@ -1,15 +1,15 @@
 {
   "id": "wled-screen-sync",
-  "name": "WLED Screen Sync",
-  "version": "0.1.0",
+  "name": "Ambilight Studio",
+  "version": "0.2.0",
   "apiVersion": 1,
   "permissions": [
     "exec"
   ],
   "author": "KalelAlx",
-  "description": "Syncs TV picture colors to one configured WLED controller over DDP.",
+  "description": "Discovers WLED controllers on the local network and syncs TV colors to the selected controller over DDP.",
   "main": "index.js",
   "ui": {
-    "label": "WLED Screen Sync"
+    "label": "Ambilight Studio"
   }
 }
