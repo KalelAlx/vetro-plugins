@@ -57,6 +57,12 @@ var SHIFT_MAP = {
     '?': 'slash'
 };
 
+var STREAM_PRESETS = {
+    fast: { width: 640, height: 360, quality: 45 },
+    balanced: { width: 960, height: 540, quality: 55 },
+    hd: { width: 1280, height: 720, quality: 72 }
+};
+
 function loadPage(ctx) {
     var places = [path.join(__dirname, 'ui.html'), path.join(ctx.dir || '', 'ui.html')];
     for (var i = 0; i < places.length; i++) {
@@ -335,9 +341,120 @@ module.exports = function (ctx) {
     var streamKillTimer = null;
     var streamConnectTimer = null;
     var streamRetryTimer = null;
+    var streamRestartTimer = null;
     var streamRetryCount = 0;
     var streamPipelineRestarts = 0;
+    var streamGeneration = 0;
+    var streamPreset = 'balanced';
+    var streamWidth = STREAM_PRESETS.balanced.width;
+    var streamHeight = STREAM_PRESETS.balanced.height;
+    var streamQuality = STREAM_PRESETS.balanced.quality;
     var screenshotWaiters = {};
+
+    function isFiniteQuality(v) {
+        return (typeof v === 'number' || (typeof v === 'string' && v.trim() !== '')) && isFinite(Number(v));
+    }
+
+    function getStreamConfig() {
+        return {
+            preset: streamPreset,
+            width: streamWidth,
+            height: streamHeight,
+            quality: streamQuality
+        };
+    }
+
+    function loadStreamConfig() {
+        streamPreset = 'balanced';
+        streamWidth = STREAM_PRESETS.balanced.width;
+        streamHeight = STREAM_PRESETS.balanced.height;
+        streamQuality = STREAM_PRESETS.balanced.quality;
+        try {
+            var cfg = getCfg();
+            if (typeof cfg.streamPreset === 'string' &&
+                Object.prototype.hasOwnProperty.call(STREAM_PRESETS, cfg.streamPreset)) {
+                streamPreset = cfg.streamPreset;
+                streamWidth = STREAM_PRESETS[streamPreset].width;
+                streamHeight = STREAM_PRESETS[streamPreset].height;
+                streamQuality = STREAM_PRESETS[streamPreset].quality;
+            }
+            if (isFiniteQuality(cfg.streamQuality)) {
+                streamQuality = Math.max(20, Math.min(95, Math.round(Number(cfg.streamQuality))));
+            }
+        } catch (e) {}
+    }
+
+    function scheduleStreamRestart() {
+        if (streamRestartTimer) {
+            clearTimeout(streamRestartTimer);
+            streamRestartTimer = null;
+        }
+        if (!streamProcRunning || streamClients.length === 0) return;
+        streamRestartTimer = setTimeout(function () {
+            streamRestartTimer = null;
+            try {
+                if (streamClients.length === 0) return;
+                if (streamConnectTimer) {
+                    clearTimeout(streamConnectTimer);
+                    streamConnectTimer = null;
+                }
+                if (streamRetryTimer) {
+                    clearTimeout(streamRetryTimer);
+                    streamRetryTimer = null;
+                }
+                if (streamTcpSocket) {
+                    var oldSock = streamTcpSocket;
+                    streamTcpSocket = null;
+                    try { oldSock.destroy(); } catch (e) {}
+                }
+                streamConnecting = false;
+                streamRetryCount = 0;
+                streamPipelineRestarts = 0;
+                lastFrame = null;
+                lastFrameTime = 0;
+                streamProcRunning = false;
+                startStreamPipeline();
+            } catch (e) {}
+        }, 200);
+    }
+
+    function applyStreamConfig(opts, persist) {
+        if (opts && typeof opts === 'object') {
+            var prevPreset = streamPreset;
+            var prevWidth = streamWidth;
+            var prevHeight = streamHeight;
+            var prevQuality = streamQuality;
+            var key = opts.preset || opts.mode;
+            var hasExplicitQuality = isFiniteQuality(opts.quality);
+            if (typeof key === 'string' && Object.prototype.hasOwnProperty.call(STREAM_PRESETS, key)) {
+                streamPreset = key;
+                streamWidth = STREAM_PRESETS[key].width;
+                streamHeight = STREAM_PRESETS[key].height;
+                if (!hasExplicitQuality) {
+                    streamQuality = STREAM_PRESETS[key].quality;
+                }
+            }
+            if (hasExplicitQuality) {
+                streamQuality = Math.max(20, Math.min(95, Math.round(Number(opts.quality))));
+            }
+            var changed = (streamPreset !== prevPreset || streamWidth !== prevWidth ||
+                streamHeight !== prevHeight || streamQuality !== prevQuality);
+            if (changed) {
+                if (persist) {
+                    try {
+                        var c = getCfg();
+                        c.streamPreset = streamPreset;
+                        c.streamQuality = streamQuality;
+                        saveCfg(c);
+                    } catch (e) {}
+                }
+                if (streamProcRunning && streamClients.length > 0) {
+                    scheduleStreamRestart();
+                }
+            }
+        }
+        return getStreamConfig();
+    }
 
     function allocBuf(n) {
         return (typeof Buffer.alloc === 'function') ? Buffer.alloc(n) : new Buffer(n);
@@ -502,7 +619,11 @@ module.exports = function (ctx) {
 
         function handleDisconnect() {
             try {
-                if (streamTcpSocket === sock) streamTcpSocket = null;
+                if (streamTcpSocket !== sock) {
+                    try { sock.destroy(); } catch (e) {}
+                    return;
+                }
+                streamTcpSocket = null;
                 streamConnecting = false;
                 try { sock.destroy(); } catch (e) {}
                 if (streamClients.length > 0 && streamProcRunning && !streamRetryTimer) {
@@ -540,12 +661,13 @@ module.exports = function (ctx) {
             return;
         }
         streamProcRunning = true;
+        var gen = ++streamGeneration;
         var gstCmd = STOP_STREAM_CMD + "; " +
             "WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run gst-launch-1.0 -q waylandsrc ! " +
             "video/x-raw,width=1920,height=1080 ! " +
-            "videoscale method=0 n-threads=2 ! video/x-raw,width=960,height=540 ! " +
+            "videoscale method=0 n-threads=2 ! video/x-raw,width=" + streamWidth + ",height=" + streamHeight + " ! " +
             "videoconvert n-threads=2 ! " +
-            "jpegenc quality=55 idct-method=1 ! " +
+            "jpegenc quality=" + streamQuality + " idct-method=1 ! " +
             "tcpserversink host=127.0.0.1 port=18888 sync=false </dev/null >/dev/null 2>&1 & " +
             "echo $! > " + STREAM_PID_FILE;
         try {
@@ -555,6 +677,7 @@ module.exports = function (ctx) {
                         ctx.execute(STOP_STREAM_CMD, 2000).catch(function () {});
                         return;
                     }
+                    if (gen !== streamGeneration) return;
                     if (r && r.exit_code !== 0) {
                         stopStreamPipeline();
                         closeAllStreamClients();
@@ -562,6 +685,7 @@ module.exports = function (ctx) {
                 } catch (e) {}
             }, function () {
                 try {
+                    if (gen !== streamGeneration) return;
                     stopStreamPipeline();
                     closeAllStreamClients();
                 } catch (e) {}
@@ -582,11 +706,16 @@ module.exports = function (ctx) {
     function stopStreamPipeline() {
         var wasRunning = streamProcRunning;
         streamProcRunning = false;
+        streamGeneration++;
         streamConnecting = false;
         streamRetryCount = 0;
         streamPipelineRestarts = 0;
         lastFrame = null;
         lastFrameTime = 0;
+        if (streamRestartTimer) {
+            clearTimeout(streamRestartTimer);
+            streamRestartTimer = null;
+        }
         if (streamKillTimer) {
             clearTimeout(streamKillTimer);
             streamKillTimer = null;
@@ -708,6 +837,7 @@ module.exports = function (ctx) {
 
     return {
         start: function () {
+            loadStreamConfig();
             page = loadPage(ctx);
         },
 
@@ -745,7 +875,8 @@ module.exports = function (ctx) {
                 res.end(JSON.stringify({
                     ok: true,
                     paired: !!(cfg0 && cfg0.token),
-                    tvIp: getTvIp()
+                    tvIp: getTvIp(),
+                    stream: getStreamConfig()
                 }));
                 return true;
             }
@@ -1000,6 +1131,42 @@ module.exports = function (ctx) {
                         }
                         onOk(r);
                     }, onErr);
+                });
+                return true;
+            }
+
+            // POST api/stream_preset — configure live MJPEG stream preset and JPEG quality
+            if (sub === 'stream_preset' && req.method === 'POST') {
+                readJson(req, 4096, function (err, parsed) {
+                    if (err) {
+                        res.writeHead(400, { 'content-type': 'application/json' });
+                        res.end(JSON.stringify({ ok: false, error: err.message }));
+                        return;
+                    }
+                    var rawPreset = parsed.preset || parsed.mode;
+                    var hasPreset = (typeof rawPreset === 'string' &&
+                        Object.prototype.hasOwnProperty.call(STREAM_PRESETS, rawPreset));
+                    var hasQuality = isFiniteQuality(parsed.quality);
+                    if (!hasPreset && !hasQuality) {
+                        res.writeHead(400, { 'content-type': 'application/json' });
+                        res.end(JSON.stringify({ ok: false, error: 'invalid preset or quality' }));
+                        return;
+                    }
+                    var cfgOut = applyStreamConfig({
+                        preset: hasPreset ? rawPreset : undefined,
+                        quality: hasQuality ? Number(parsed.quality) : undefined
+                    }, true);
+                    res.writeHead(200, {
+                        'content-type': 'application/json',
+                        'cache-control': 'no-store'
+                    });
+                    res.end(JSON.stringify({
+                        ok: true,
+                        preset: cfgOut.preset,
+                        width: cfgOut.width,
+                        height: cfgOut.height,
+                        quality: cfgOut.quality
+                    }));
                 });
                 return true;
             }

@@ -738,6 +738,38 @@ button.danger:hover { background: rgba(248, 81, 73, .22); }
   height: 15px;
   accent-color: var(--action);
 }
+.preset-switch button {
+  padding: 2px 8px;
+  font-size: 11px;
+  height: 22px;
+}
+.quality-ctrl {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-family: monospace;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1px 7px;
+  height: 22px;
+  white-space: nowrap;
+}
+.quality-ctrl input[type="range"] {
+  width: 64px;
+  height: 14px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--action);
+}
+#lbl-stream-quality {
+  min-width: 18px;
+  text-align: right;
+  color: var(--text);
+  font-weight: 600;
+}
 #only-theater-actions {
   display: none;
   align-items: center;
@@ -951,6 +983,18 @@ body.is-screen-only #only-theater-actions {
             <input type="checkbox" id="chk-auto-refresh">
             <span>Live stream</span>
           </label>
+          <span id="stream-quality-controls" style="display:none;align-items:center;gap:6px;flex-wrap:wrap">
+            <div class="mode-switch preset-switch" role="group" aria-label="Live stream resolution preset">
+              <button type="button" id="btn-preset-fast" title="Fast (640×360, Q45, lowest bandwidth)">Fast</button>
+              <button type="button" id="btn-preset-balanced" class="active" title="Balanced (960×540, Q55, recommended)">Balanced</button>
+              <button type="button" id="btn-preset-hd" title="HD (1280×720, Q72, sharp detail)">HD</button>
+            </div>
+            <label class="quality-ctrl" title="Fine-tune live stream JPEG quality (20-95)">
+              <span>Q</span>
+              <input type="range" id="rng-stream-quality" min="20" max="95" step="5" value="55">
+              <span id="lbl-stream-quality">55</span>
+            </label>
+          </span>
           <span id="screen-time" style="font-size:var(--fs-xs);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px;display:inline-block;vertical-align:middle"></span>
         </div>
         <div class="screen-action-group">
@@ -1517,6 +1561,9 @@ Promise.all([
   if (isFallbackHost && d.tvIp) {
     tvIp = d.tvIp;
     updateCertUrl();
+  }
+  if (d && d.stream) {
+    updateStreamConfigUI(d.stream);
   }
   if (tokRes && tokRes.ok) {
     if (typeof tokRes.token === "string" && tokRes.token.length > 0) {
@@ -2121,6 +2168,12 @@ var screenTime = document.getElementById("screen-time");
 var screenHint = document.getElementById("screen-hint");
 var btnRefreshScreen = document.getElementById("btn-refresh-screen");
 var chkAutoRefresh = document.getElementById("chk-auto-refresh");
+var streamQualityControls = document.getElementById("stream-quality-controls");
+var btnPresetFast = document.getElementById("btn-preset-fast");
+var btnPresetBalanced = document.getElementById("btn-preset-balanced");
+var btnPresetHd = document.getElementById("btn-preset-hd");
+var rngStreamQuality = document.getElementById("rng-stream-quality");
+var lblStreamQuality = document.getElementById("lbl-stream-quality");
 
 var linkStandalone = document.getElementById("link-standalone");
 var standaloneBanner = document.getElementById("standalone-banner");
@@ -2955,6 +3008,109 @@ if (screenFrame) {
 
 var streamFailCount = 0;
 var streamFallbackPolling = false;
+var currentStreamPreset = "balanced";
+var currentStreamWidth = 960;
+var currentStreamHeight = 540;
+var currentStreamQuality = 55;
+var STREAM_PRESET_DEFAULTS = {
+  fast: { width: 640, height: 360, quality: 45 },
+  balanced: { width: 960, height: 540, quality: 55 },
+  hd: { width: 1280, height: 720, quality: 72 }
+};
+
+function updateStreamQualityVisibility() {
+  if (!streamQualityControls) return;
+  streamQualityControls.style.display = (chkAutoRefresh && chkAutoRefresh.checked) ? "inline-flex" : "none";
+  if (isScreenOnly) fitScreenFrame();
+}
+
+function updatePresetButtons(mode) {
+  currentStreamPreset = mode;
+  if (btnPresetFast) btnPresetFast.classList.toggle("active", mode === "fast");
+  if (btnPresetBalanced) btnPresetBalanced.classList.toggle("active", mode === "balanced");
+  if (btnPresetHd) btnPresetHd.classList.toggle("active", mode === "hd");
+}
+
+function updateStreamConfigUI(cfg) {
+  if (!cfg || typeof cfg !== "object") return;
+  if (cfg.preset || cfg.mode) {
+    var m = cfg.preset || cfg.mode;
+    if (STREAM_PRESET_DEFAULTS[m]) {
+      updatePresetButtons(m);
+      currentStreamWidth = cfg.width || STREAM_PRESET_DEFAULTS[m].width;
+      currentStreamHeight = cfg.height || STREAM_PRESET_DEFAULTS[m].height;
+    }
+  }
+  if (typeof cfg.width === "number" && isFinite(cfg.width)) currentStreamWidth = cfg.width;
+  if (typeof cfg.height === "number" && isFinite(cfg.height)) currentStreamHeight = cfg.height;
+  if (cfg.quality !== undefined && cfg.quality !== null && isFinite(Number(cfg.quality))) {
+    currentStreamQuality = Math.max(20, Math.min(95, Math.round(Number(cfg.quality))));
+    if (rngStreamQuality) rngStreamQuality.value = String(currentStreamQuality);
+    if (lblStreamQuality) lblStreamQuality.textContent = String(currentStreamQuality);
+  }
+}
+
+function postStreamConfig(payload) {
+  fetch("stream_preset", {
+    method: "POST",
+    headers: { "Content-Type": "text/plain" },
+    body: JSON.stringify(payload)
+  }).then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d && d.ok) {
+        updateStreamConfigUI(d);
+        if (chkAutoRefresh && chkAutoRefresh.checked && !streamFallbackPolling) {
+          screenTime.textContent = "🔴 Live stream · " + currentStreamWidth + "×" + currentStreamHeight + " · Q" + currentStreamQuality;
+        }
+      }
+    })
+    .catch(function () {});
+}
+
+function setStreamPreset(mode) {
+  var p = STREAM_PRESET_DEFAULTS[mode];
+  if (!p) return;
+  updateStreamConfigUI({ preset: mode, width: p.width, height: p.height, quality: p.quality });
+  if (chkAutoRefresh && chkAutoRefresh.checked && !streamFallbackPolling) {
+    screenTime.textContent = "🔴 Switching to " + p.width + "×" + p.height + "…";
+  }
+  postStreamConfig({ preset: mode });
+}
+
+function setStreamQuality(q) {
+  var val = Math.max(20, Math.min(95, Math.round(Number(q) || 55)));
+  currentStreamQuality = val;
+  if (lblStreamQuality) lblStreamQuality.textContent = String(val);
+  postStreamConfig({ quality: val });
+}
+
+if (btnPresetFast) {
+  btnPresetFast.addEventListener("click", function () {
+    setStreamPreset("fast");
+    btnPresetFast.blur();
+  });
+}
+if (btnPresetBalanced) {
+  btnPresetBalanced.addEventListener("click", function () {
+    setStreamPreset("balanced");
+    btnPresetBalanced.blur();
+  });
+}
+if (btnPresetHd) {
+  btnPresetHd.addEventListener("click", function () {
+    setStreamPreset("hd");
+    btnPresetHd.blur();
+  });
+}
+if (rngStreamQuality) {
+  rngStreamQuality.addEventListener("input", function () {
+    if (lblStreamQuality) lblStreamQuality.textContent = rngStreamQuality.value;
+  });
+  rngStreamQuality.addEventListener("change", function () {
+    setStreamQuality(rngStreamQuality.value);
+    rngStreamQuality.blur();
+  });
+}
 
 function startLiveStream() {
   if (autoRefreshTimer) {
@@ -2973,8 +3129,10 @@ function startLiveStream() {
 
   screenImg.onload = function () {
     streamFailCount = 0;
-    var dim = (screenImg.naturalWidth && screenImg.naturalHeight) ? (screenImg.naturalWidth + "×" + screenImg.naturalHeight) : "";
-    screenTime.textContent = "🔴 Live stream" + (dim ? (" · " + dim) : "");
+    var dim = (screenImg.naturalWidth && screenImg.naturalHeight)
+      ? (screenImg.naturalWidth + "×" + screenImg.naturalHeight)
+      : (currentStreamWidth + "×" + currentStreamHeight);
+    screenTime.textContent = "🔴 Live stream · " + dim + " · Q" + currentStreamQuality;
     if (isScreenOnly) fitScreenFrame();
   };
   screenImg.onerror = function () {
@@ -3145,6 +3303,7 @@ if (chkHoverOnly) {
 
 if (chkAutoRefresh) {
   chkAutoRefresh.onchange = function () {
+    updateStreamQualityVisibility();
     if (chkAutoRefresh.checked) {
       startLiveStream();
     } else {
@@ -3153,6 +3312,7 @@ if (chkAutoRefresh) {
     chkAutoRefresh.blur();
   };
 }
+updateStreamQualityVisibility();
 
 btnRefreshScreen.onclick = function () {
   if (chkAutoRefresh && chkAutoRefresh.checked) {
