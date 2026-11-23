@@ -3,123 +3,34 @@ using System.Diagnostics;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 
-internal static class TvAudioCapture
+// Update is called only by Main. A stop request stays latched until the old
+// owner has exited, even if the next frame requests picture capture again.
+internal sealed class PictureWorker
 {
-    private static Process process;
-    private static volatile bool running;
-    private static volatile int bass, mid, treble;
-    private static long capturedBytes;
-    private static volatile int rmsLevel;
-    private static volatile int peakLevel;
-    private static volatile int filteredLevel;
-    private static double audioEnvelope;
-
-    public static int Bass { get { return bass; } }
-    public static int Mid { get { return mid; } }
-    public static int Treble { get { return treble; } }
-    public static bool Running { get { return running; } }
-    public static long CapturedBytes { get { return System.Threading.Interlocked.Read(ref capturedBytes); } }
-    public static int RmsLevel { get { return rmsLevel; } }
-    public static int PeakLevel { get { return peakLevel; } }
-    public static int FilteredLevel { get { return filteredLevel; } }
-
-    public static void ApplyProfile(string sampling,int sensitivity)
+    private readonly Action<Func<bool>> capture;
+    private readonly Action release;
+    private System.Threading.Thread owner;
+    private volatile bool stopRequested;
+    internal PictureWorker(Action<Func<bool>> capture, Action release)
     {
-        double gain=Math.Max(0.25,sensitivity/100.0);
-        double rms=rmsLevel/255.0*gain;
-        double peak=peakLevel/255.0*gain;
-        double next;
-        if(sampling=="impact") {
-            double threshold=0.42;
-            next=peak>=threshold ? (peak-threshold)/(1-threshold) : 0;
-            audioEnvelope=audioEnvelope>next ? audioEnvelope*0.82 : next;
-        } else if(sampling=="music") {
-            next=rms*0.72+peak*0.28;
-            audioEnvelope=next>audioEnvelope ? audioEnvelope+(next-audioEnvelope)*0.18 : audioEnvelope+(next-audioEnvelope)*0.08;
-        } else {
-            next=Math.Min(1,rms*0.75+peak*0.25);
-            audioEnvelope=next>audioEnvelope ? audioEnvelope+(next-audioEnvelope)*0.28 : audioEnvelope+(next-audioEnvelope)*0.12;
+        this.capture = capture;
+        this.release = release;
+    }
+    internal void Update(bool wanted)
+    {
+        if (!wanted) stopRequested = true;
+        if (owner != null)
+        {
+            if (!owner.Join(0)) return;
+            owner = null;
         }
-        filteredLevel=(int)Math.Round(Math.Max(0,Math.Min(255,audioEnvelope*255)));
-        int overall=filteredLevel;
-        bass=overall;
-        mid=(int)Math.Round(overall*0.75);
-        treble=(int)Math.Round(overall*0.50);
-    }
-
-    public static void Start()
-    {
-        if (running) return;
-        running = true;
-        var thread = new System.Threading.Thread(ReadLoop) { IsBackground = true };
-        thread.Start();
-    }
-
-    public static void Stop()
-    {
-        running = false;
-        try {
-            if (process != null && !process.HasExited) process.Kill();
-        } catch (InvalidOperationException) {}
-        process = null;
-    }
-
-    private static void ReadLoop()
-    {
-        try {
-            var start = new ProcessStartInfo("arecord")
-            {
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
-            start.Arguments = "-q -D hw:0,5 -f S16_LE -r 48000 -c 2 -t raw";
-            process = Process.Start(start);
-            if (process == null) { running = false; return; }
-            var stream = process.StandardOutput.BaseStream;
-            var buffer = new byte[8192];
-            int count;
-            while (running && (count = stream.Read(buffer,0,buffer.Length)) > 0)
-            {
-                System.Threading.Interlocked.Add(ref capturedBytes,count);
-                int frames = count / 4;
-                var mono = new int[frames];
-                for (int i=0;i<frames;i++) {
-                    short left=BitConverter.ToInt16(buffer,i*4);
-                    short right=BitConverter.ToInt16(buffer,i*4+2);
-                    mono[i]=(left+right)/2;
-                }
-                if (frames < 128) continue;
-                double rms=0;
-                int peak=0;
-                for(int i=0;i<frames;i++) rms += mono[i]*mono[i];
-                for(int i=0;i<frames;i++) peak=Math.Max(peak,Math.Abs(mono[i]));
-                rms=Math.Sqrt(rms/frames)/32768.0;
-                rmsLevel=(int)Math.Round(Math.Min(255,Math.Max(rms*255*4,peak/32768.0*255)));
-                peakLevel=(int)Math.Round(Math.Min(255,peak/32768.0*255));
-                int overall=(int)Math.Round((double)Math.Min(255,rmsLevel));
-                bass=overall;
-                mid=(int)Math.Round(overall*0.75);
-                treble=(int)Math.Round(overall*0.50);
-            }
-        } catch (Exception) {
-            running = false;
-        }
-    }
-
-    private static int Level(int[] samples,int count,double frequency)
-    {
-        int used=Math.Min(count,1024);
-        double omega=2*Math.PI*frequency/48000.0;
-        double real=0, imag=0;
-        for(int i=0;i<used;i++) {
-            double value=samples[i]/32768.0;
-            real += value*Math.Cos(omega*i);
-            imag -= value*Math.Sin(omega*i);
-        }
-        double magnitude=Math.Sqrt(real*real+imag*imag)/used*2;
-        return (int)Math.Round(Math.Min(255,magnitude*255));
+        if (!wanted) return;
+        stopRequested = false;
+        owner = new System.Threading.Thread(delegate() {
+            try { capture(() => !stopRequested); }
+            finally { release(); }
+        }) { IsBackground = true };
+        owner.Start();
     }
 }
 
@@ -548,8 +459,17 @@ internal static class WledAmbiPpi
 
 
 
-    private static void Capture()
+    private static bool WantsPicture(Tuning config) { return config.Lighting == "screen" || config.Lighting == "screen-audio"; }
+
+    private static volatile bool samplerUnavailable;
+    private static void Capture(Func<bool> wanted)
     {
+        if (!PpiVeInit())
+        {
+            WriteStatus("Helper unavailable: TV video sampler API is not supported");
+            samplerUnavailable = true;
+            return;
+        }
         int scans = 0, changed = 0, phase = 0;
         TizenAmbilight.VideoPlaneCapture.SetRequestSize(960, 540);
         frameStatus = TizenAmbilight.VideoPlaneCapture.Init();
@@ -565,9 +485,8 @@ internal static class WledAmbiPpi
         double nextSourcePoll=0, nextRecoveryReset=0, nextInitRetry=0;
         double longestReadMs = 0;
         var window = Stopwatch.StartNew();
-        while (true)
+        while (wanted())
         {
-            tuning = Tuning.Read(tuning);
             var previous = latest;
             double started = uptime.Elapsed.TotalMilliseconds;
             if(started>=nextSourcePoll) {
@@ -676,19 +595,12 @@ internal static class WledAmbiPpi
             status += full ? (hdr ? ", HDR10 PQ BT.2020" : ", SDR BT.709") : pictureRecovery ? ", trying full-picture recovery" : ", TV sampled RGB";
             status += ", saturation " + tuning.Saturation + "%, smoothing " + tuning.Smooth + " ms, sampling " + tuning.SampleMode;
             if (inputChroma > 0) status += String.Format(", zone chroma cancellation {0:F1}%",100*(1-averagedChroma/inputChroma));
-            if (tuning.Lighting == "screen-audio" || tuning.Lighting == "tv-audio")
-            {
-                status += ", audio rms " + TvAudioCapture.RmsLevel;
-                status += ", audio peak " + TvAudioCapture.PeakLevel;
-                status += ", audio level " + TvAudioCapture.FilteredLevel;
-                status += ", audio sampling " + tuning.AudioSampling;
-                status += ", audio bytes " + TvAudioCapture.CapturedBytes;
-            }
+            if (tuning.Lighting == "screen-audio") status += ", " + TvAudioCapture.Status(tuning);
             inputChroma = averagedChroma = 0;
             longestReadMs = 0;
             planeMilliseconds = 0;
             changed = 0;
-            if (tuning.Lighting == "screen" || tuning.Lighting == "tv-audio" || tuning.Lighting=="screen-audio")
+            if (WantsPicture(tuning))
                 WriteStatus(status);
             scans = 0;
             window.Restart();
@@ -706,18 +618,28 @@ internal static class WledAmbiPpi
             if(args[i]=="--status-dir" && i+1<args.Length) statusDir=args[++i];
         }
         if(IntPtr.Size!=4) { Console.Error.WriteLine("32-bit little-endian runtime required"); return 2; }
+        TvAudioCapture.Binding = new PlaybackBinding(statusDir);
+        TvAudioCapture.PlaybackDevice("/proc/asound", TvAudioCapture.Binding);
         tuning = Tuning.Read(tuning);
-        if(!PpiVeInit()) { WriteStatus("Helper unavailable: TV video sampler API is not supported"); return 1; }
         latest = new byte[LedCount * 3];
         var current = Array.ConvertAll(latest, value => (double)value);
-        var pixels = new byte[current.Length];
+        var picturePixels = new byte[current.Length];
+        var pixels = new byte[tuning.Leds * 3];
+        Tuning mappedConfig = null;
+        StripPixel[] layout = null;
         var clock = Stopwatch.StartNew();
         double nextPreview = 0;
         double previous = 0;
         double next = 0;
-        string activeMode = null;
-        bool captureRunning = false;
-        double nextTvAudioRestart = 0;
+        double nextConfigRead = 0;
+        var pictureWorker = new PictureWorker(Capture, TizenAmbilight.VideoPlaneCapture.Release);
+        double nextAudioStatus = 0, nextAudioSourcePoll = 0;
+        int activeAudioSource = -1, previousObservation = -1;
+        double transitionStart = -1000;
+        string lastLighting = null, lastReaction = null;
+        var transitionFrom = new byte[pixels.Length];
+        var pictureGain = new double[tuning.Leds];
+        var gainFrom = new double[tuning.Leds];
         using (var udp = new UdpClient())
         {
             System.Net.IPEndPoint endpoint = null;
@@ -725,26 +647,67 @@ internal static class WledAmbiPpi
             while (true)
             {
                 double now = clock.Elapsed.TotalMilliseconds;
-                tuning = Tuning.Read(tuning);
+                if (now >= nextConfigRead)
+                {
+                    tuning = Tuning.Read(tuning);
+                    nextConfigRead = now + 200;
+                }
                 var config = tuning;
-                if (activeMode != config.Lighting)
+                if (config != mappedConfig)
                 {
-                    if (activeMode == "tv-audio" || activeMode == "screen-audio") TvAudioCapture.Stop();
-                    activeMode = config.Lighting;
-                    if ((config.Lighting == "screen" || config.Lighting == "screen-audio") && !captureRunning)
+                    layout = MapStrip(config);
+                    mappedConfig = config;
+                    if (pixels.Length != config.Leds * 3)
                     {
-                        captureRunning = true;
-                        var capture = new System.Threading.Thread(Capture) { IsBackground = true };
-                        capture.Start();
+                        pixels = new byte[config.Leds * 3];
+                        transitionFrom = new byte[pixels.Length];
+                        pictureGain = new double[config.Leds];
+                        gainFrom = new double[config.Leds];
+                        lastLighting = null;
+                        transitionStart = now;
                     }
-                    if (config.Lighting == "tv-audio" || config.Lighting == "screen-audio") TvAudioCapture.Start();
-                    if (config.Lighting != "tv-audio" && config.Lighting != "screen-audio") TvAudioCapture.Stop();
                 }
-                if (config.Lighting != "screen" && config.Lighting != "screen-audio" && captureRunning)
+                string reaction = config.AudioReaction;
+                if (config.Lighting != lastLighting || reaction != lastReaction)
                 {
-                    captureRunning = false;
-                    TizenAmbilight.VideoPlaneCapture.Release();
+                    if (config.Lighting == "screen-audio")
+                    {
+                        if (lastLighting == "screen-audio") Array.Copy(pictureGain, gainFrom, config.Leds);
+                        else for (int i = 0; i < gainFrom.Length; i++) gainFrom[i] = 1;
+                    }
+                    else Buffer.BlockCopy(pixels, 0, transitionFrom, 0, pixels.Length);
+                    transitionStart = now;
+                    lastLighting = config.Lighting;
+                    lastReaction = reaction;
                 }
+                double mix = Math.Min(1, (now - transitionStart) / 180);
+                mix = mix * mix * (3 - 2 * mix);
+                if (samplerUnavailable) return 1;
+                pictureWorker.Update(config.HasTarget && WantsPicture(config));
+                if (!config.HasTarget)
+                {
+                    TvAudioCapture.Update(false, config, false);
+                    System.Threading.Thread.Sleep(250);
+                    continue;
+                }
+                bool wantsAudio = config.Lighting == "tv-audio" || config.Lighting == "screen-audio";
+                bool sourceChanged = false;
+                if (wantsAudio && now >= nextAudioSourcePoll)
+                {
+                    nextAudioSourcePoll = now + 500;
+                    int observed;
+                    if (TryReadSourceType(out observed))
+                    {
+                        if (observed == previousObservation)
+                        {
+                            sourceChanged = activeAudioSource >= 0 && activeAudioSource != observed;
+                            activeAudioSource = observed;
+                        }
+                        previousObservation = observed;
+                    }
+                }
+                if (!wantsAudio) activeAudioSource = previousObservation = -1;
+                var audio = TvAudioCapture.Update(wantsAudio, config, sourceChanged);
                 if (config.Lighting != "screen" && config.Lighting != "tv-audio" && config.Lighting != "screen-audio")
                 {
                     string effectStatus = "Effect active: " + config.Lighting;
@@ -752,49 +715,38 @@ internal static class WledAmbiPpi
                 }
                 if (config.Lighting == "tv-audio")
                 {
-                    TvAudioCapture.ApplyProfile(config.AudioSampling,config.AudioSensitivity);
-                    RenderAudio(pixels, now, config);
-                    config.Apply(pixels);
-                    if (now >= nextTvAudioRestart)
+                    RenderReaction(pixels, layout, now, config, audio, false);
+                    config.ApplyAudio(pixels);
+                    if (now >= nextAudioStatus)
                     {
-                        if (!TvAudioCapture.Running) TvAudioCapture.Start();
-                        WriteStatus("TV audio sync active, capture " + (TvAudioCapture.Running ? "running" : "starting") +
-                            ", rms " + TvAudioCapture.RmsLevel + ", peak " + TvAudioCapture.PeakLevel +
-                            ", audio " + TvAudioCapture.FilteredLevel + ", sampling " + config.AudioSampling +
-                            ", bytes " + TvAudioCapture.CapturedBytes);
-                        nextTvAudioRestart = now + 1000;
-                    }
-                }
-                else if (config.Lighting == "screen-audio")
-                {
-                    TvAudioCapture.ApplyProfile(config.AudioSampling,config.AudioSensitivity);
-                    double blend = config.Smooth==0 ? 1 : 1 - Math.Exp(-(now - previous) / config.Smooth);
-                    previous = now;
-                    var target = latest;
-                    for (int i = 0; i < pixels.Length; i++)
-                    {
-                        current[i] += (target[i] - current[i]) * blend;
-                        pixels[i] = (byte)Math.Round(current[i]);
-                    }
-                    BlendScreenWithAudio(pixels, now, config);
-                    config.Apply(pixels);
-                    if (now >= nextTvAudioRestart)
-                    {
-                        if (!TvAudioCapture.Running) TvAudioCapture.Start();
-                        nextTvAudioRestart = now + 1000;
+                        WriteStatus("TV audio sync active, " + TvAudioCapture.Status(config));
+                        nextAudioStatus = now + 1000;
                     }
                 }
                 else
                 {
-                    double blend = config.Smooth==0 ? 1 : 1 - Math.Exp(-(now - previous) / config.Smooth);
+                    double blend = config.Smooth == 0 ? 1 : 1 - Math.Exp(-(now - previous) / config.Smooth);
                     previous = now;
                     var target = latest;
-                    for (int i = 0; i < pixels.Length; i++)
+                    for (int i = 0; i < current.Length; i++)
                     {
                         current[i] += (target[i] - current[i]) * blend;
-                        pixels[i] = (byte)Math.Round(current[i]);
+                        picturePixels[i] = (byte)Math.Round(current[i]);
                     }
-                    config.Apply(pixels);
+                    config.Apply(picturePixels);
+                    for (int i = 0; i < layout.Length; i++)
+                    {
+                        int sample = layout[i].PictureSample;
+                        if (sample < 0) Array.Clear(pixels, i * 3, 3);
+                        else Buffer.BlockCopy(picturePixels, sample * 3, pixels, i * 3, 3);
+                    }
+                    if (config.Lighting == "screen-audio")
+                        RenderReaction(pixels, layout, now, config, audio, true, pictureGain, gainFrom, mix);
+                }
+                if (mix < 1 && config.Lighting != "screen-audio")
+                {
+                    for (int i = 0; i < pixels.Length; i++)
+                        pixels[i] = (byte)Math.Round(transitionFrom[i] + mix * (pixels[i] - transitionFrom[i]));
                 }
                 int port = config.Protocol=="dnrgb" ? 21324 : 4048;
                 try {
@@ -822,54 +774,177 @@ internal static class WledAmbiPpi
             }
         }
     }
-    private static void RenderAudio(byte[] pixels,double now,Tuning config)
+    // Indexed in controller order, with coordinates in the installed TV layout.
+    private struct StripPixel
     {
-        double gain=Math.Max(0.25,config.AudioSensitivity/100.0);
-        int bass=Math.Min(255,(int)(TvAudioCapture.Bass*gain));
-        int mid=Math.Min(255,(int)(TvAudioCapture.Mid*gain));
-        int treble=Math.Min(255,(int)(TvAudioCapture.Treble*gain));
-        int level=Math.Max(bass,Math.Max(mid,treble));
-        double pulse=level/255.0;
-        for (int i=0;i<LedCount;i++)
+        public int PictureSample;
+        public double RadialPosition;
+        public double PerimeterPosition;
+    }
+
+    private static StripPixel[] MapStrip(Tuning config)
+    {
+        int[] counts = { config.TopCount, config.RightCount, config.BottomCount, config.LeftCount };
+        bool?[] enabled = { config.Top, config.Right, config.Bottom, config.Left };
+        int corner = config.StartCorner == "top-left" ? 0 :
+            config.StartCorner == "top-right" ? counts[0] :
+            config.StartCorner == "bottom-right" ? counts[0] + counts[1] : config.Leds - counts[3];
+        bool reverse = config.Direction == "reverse";
+        // Equal LED pitch makes opposite edge counts two estimates of one dimension.
+        // A missing pair provides no estimate for that axis; use the TV aspect then.
+        double width = MeanInstalledLength(config.TopCount, config.BottomCount);
+        double height = MeanInstalledLength(config.RightCount, config.LeftCount);
+        if (width == 0) width = height * 16 / 9;
+        if (height == 0) height = width * 9 / 16;
+        double nearestEdge = 0.5 * Math.Min(width, height);
+        double cornerRadius = 0.5 * Math.Sqrt(width * width + height * height);
+        var layout = new StripPixel[config.Leds];
+        int logicalStart = 0, sampleStart = 0;
+        for (int side = 0; side < counts.Length; side++)
         {
-            double position=i/(double)(LedCount-1);
-            int r,g,b;
-            if(config.AudioReaction=="pulse") {
-                double w=Math.Exp(-Math.Pow((position-0.5)*4.5,2))*pulse;
-                r=(byte)(255*w);g=(byte)(80*w);b=(byte)(220*w);
-            } else if(config.AudioReaction=="bass") {
-                r=(byte)(bass*(1-position)*0.9);g=(byte)(bass*position*0.9);b=(byte)(bass*Math.Sin(Math.PI*position)*0.35);
-            } else if(config.AudioReaction=="beat") {
-                double flash=pulse*pulse;
-                r=(byte)(255*flash);g=(byte)(180*flash);b=(byte)(255*flash);
-            } else if(config.AudioReaction=="ambient") {
-                double hue=(now/8000.0+position*0.20)%1;
-                HsvToRgb(hue,(0.75+0.25*pulse),(0.15+0.85*pulse),out r,out g,out b);
-            } else {
-                r=(byte)(bass*(1-position));g=(byte)(mid*(1-Math.Abs(position-0.5)*2));b=(byte)(treble*position);
+            for (int local = 0; local < counts[side]; local++)
+            {
+                int logical = logicalStart + local;
+                int output = reverse ? corner + config.Offset - 1 - logical : logical - corner - config.Offset;
+                output = ((output % config.Leds) + config.Leds) % config.Leds;
+                double along = (local + 0.5) / counts[side];
+                double x, y;
+                switch (side)
+                {
+                    case 0: x = along; y = 0; break;
+                    case 1: x = 1; y = along; break;
+                    case 2: x = 1 - along; y = 1; break;
+                    default: x = 0; y = 1 - along; break;
+                }
+                double dx = (x - 0.5) * width;
+                double dy = (y - 0.5) * height;
+                double radius = Math.Sqrt(dx * dx + dy * dy);
+                layout[output].RadialPosition = (radius - nearestEdge) / (cornerRadius - nearestEdge);
+                layout[output].PerimeterPosition = (logical + 0.5) / config.Leds;
+                layout[output].PictureSample = enabled[side] == false ? -1 :
+                    sampleStart + local * SideLengths[side] / counts[side];
             }
-            pixels[3*i]=(byte)r;pixels[3*i+1]=(byte)g;pixels[3*i+2]=(byte)b;
+            logicalStart += counts[side];
+            sampleStart += SideLengths[side];
+        }
+        return layout;
+    }
+
+    private static double MeanInstalledLength(int first, int opposite)
+    {
+        if (first == 0 || opposite == 0) return Math.Max(first, opposite);
+        return (first + opposite) * 0.5;
+    }
+
+    // Feather just inside each band's outer radius. Outside it the mask is exactly zero.
+    private static double BandCoverage(double front, double radialPosition)
+    {
+        double t = Math.Max(0, Math.Min(1, (front - radialPosition) / 0.10));
+        return t * t * (3 - 2 * t);
+    }
+
+    private static void RenderReaction(byte[] pixels, StripPixel[] layout, double now, Tuning config, AudioAnalyzer.Frame audio, bool picture,
+        double[] pictureGain = null, double[] gainFrom = null, double mix = 1)
+    {
+        if (picture && config.AudioBlend == 0)
+        {
+            for (int i = 0; i < layout.Length; i++) pictureGain[i] = 1;
+            return; // The screen renderer already mapped the pixels and cleared disabled sides.
+        }
+        // Precompute position-independent values once per output frame.
+        if (picture && config.AudioSampling != "impact")
+        {
+            // Frame is a value type. Only the picture renderer gets the extra contrast.
+            double lift = 0.72 * audio.PictureAccent;
+            // Beat flash can miss accents below the onset detector's trigger threshold.
+            audio.Beat = Math.Max(audio.Beat, audio.PictureAccent * 0.85);
+            audio.Level += (1 - audio.Level) * lift;
+            audio.Ambient += (1 - audio.Ambient) * lift;
+            audio.Bass += audio.Bass * (1 - audio.Bass) * lift;
+            audio.Mid += audio.Mid * (1 - audio.Mid) * lift;
+            audio.Treble += audio.Treble * (1 - audio.Treble) * lift;
+        }
+        double pulseFront = 0.10 + 1.02 * audio.Level;
+        double beat = picture ? audio.Beat : Math.Sqrt(audio.Beat) * audio.Beat;
+        double blend = config.AudioBlend / 100.0;
+        double strength = blend * (1.5 - 0.5 * blend);
+        bool intensityOnly = picture && config.AudioReaction == "intensity";
+        // Follow accents more closely than the sustained bed.
+        double brightness = intensityOnly ? 0.70 * audio.Level + 0.30 * (config.AudioSampling == "impact" ? audio.Beat : audio.PictureAccent) : 1;
+        double bassFront = 1.12 * Math.Sqrt(audio.Bass);
+        double midFront = 1.12 * Math.Sqrt(audio.Mid);
+        double trebleFront = 1.12 * Math.Sqrt(audio.Treble);
+        double activity = Math.Min(1, 10 * Math.Max(audio.Bass, Math.Max(audio.Mid, audio.Treble)));
+        for (int i = 0; i < layout.Length; i++)
+        {
+            if (layout[i].PictureSample < 0)
+            {
+                Array.Clear(pixels, 3*i, 3);
+                continue;
+            }
+            double radius = layout[i].RadialPosition;
+            double amount, r, g, b;
+            if (intensityOnly) { amount = brightness; r = g = b = 0; }
+            else switch (config.AudioReaction)
+            {
+                case "pulse":
+                    // Smooth the edge of a disk expanding from the center of the picture.
+                    double cover = Math.Max(0, Math.Min(1, 0.5 + (pulseFront - radius) / 0.42));
+                    amount = audio.Level * cover * cover * (3 - 2 * cover);
+                    r = 42 * amount; g = 142 * amount; b = 172 * amount;
+                    break;
+                case "bass":
+                    double wave = 0.5 + 0.5 * Math.Cos(4 * Math.PI * layout[i].PerimeterPosition - now / 650);
+                    amount = audio.Bass * (0.20 + 0.80 * wave);
+                    r = 24 * amount; g = 90 * amount; b = 145 * amount;
+                    break;
+                case "beat":
+                    amount = beat;
+                    r = 164 * amount; g = 196 * amount; b = 210 * amount;
+                    break;
+                case "ambient":
+                    double glow = 0.5 + 0.5 * Math.Cos(2 * Math.PI * layout[i].PerimeterPosition - now / 2100);
+                    amount = audio.Ambient * (0.12 + 0.88 * glow * glow);
+                    r = 26 * amount; g = 112 * amount; b = 136 * amount;
+                    break;
+                default:
+                    // Three concentric bands share the physical screen center.
+                    double lowMask = BandCoverage(bassFront, radius);
+                    double midMask = BandCoverage(midFront, radius);
+                    double highMask = BandCoverage(trebleFront, radius);
+                    amount = activity * Math.Max(lowMask, Math.Max(midMask, highMask));
+                    double low = audio.Bass * lowMask;
+                    double mid = audio.Mid * midMask;
+                    double high = audio.Treble * highMask;
+                    double scale = 1 / Math.Max(1, low + mid + high);
+                    r = (55*low + 42*mid + 145*high) * scale;
+                    g = (78*low + 148*mid + 177*high) * scale;
+                    b = (126*low + 137*mid + 180*high) * scale;
+                    break;
+            }
+            int j = 3*i;
+            if (picture)
+            {
+                r = pixels[j]; g = pixels[j+1]; b = pixels[j+2];
+                // At full blend, reveal only the area covered by the reaction.
+                double gain = CombinedGain(amount, blend, strength);
+                if (strength > 0 && mix < 1) gain = gainFrom[i] + (gain - gainFrom[i]) * mix;
+                pictureGain[i] = gain;
+                r *= gain; g *= gain; b *= gain;
+            }
+            pixels[j] = (byte)Math.Round(r);
+            pixels[j+1] = (byte)Math.Round(g);
+            pixels[j+2] = (byte)Math.Round(b);
         }
     }
-    private static void BlendScreenWithAudio(byte[] pixels,double now,Tuning config)
+    internal static double CombinedGain(double amount, double blend, double strength)
     {
-        // Preserve the picture at zero audio blend, then add a perceptual audio lift.
-        // The old squared level curve made normal dialogue/music nearly inaudible in screen mode.
-        double measured=TvAudioCapture.FilteredLevel/255.0;
-        double level=Math.Max(0,Math.Min(1,(measured-0.025)/0.55));
-        level=Math.Pow(level,0.65);
-        double strength=config.AudioBlend/100.0;
-        double gain=1.0+level*strength*1.6;
-        for(int i=0;i<pixels.Length;i++)
-            pixels[i]=(byte)Math.Max(0,Math.Min(255,Math.Round(pixels[i]*gain)));
-    }
-    private static void HsvToRgb(double h,double s,double v,out int r,out int g,out int b)
-    {
-        int i=(int)Math.Floor(h*6)%6;
-        double f=h*6-Math.Floor(h*6),p=v*(1-s),q=v*(1-f*s),t=v*(1-(1-f)*s);
-        double rr,gg,bb;
-        if(i==0){rr=v;gg=t;bb=p;}else if(i==1){rr=q;gg=v;bb=p;}else if(i==2){rr=p;gg=v;bb=t;}else if(i==3){rr=p;gg=q;bb=v;}else if(i==4){rr=t;gg=p;bb=v;}else{rr=v;gg=p;bb=q;}
-        r=(int)Math.Round(rr*255);g=(int)Math.Round(gg*255);b=(int)Math.Round(bb*255);
+        // At the upper end a moderate accent can reveal the full sampled color.
+        // The soft knee preserves gradation below the peak and leaves silence dark.
+        double x = Math.Min(1, amount / 0.55);
+        double vivid = x * x * (3 - 2 * x);
+        double response = amount + blend * blend * (vivid - amount);
+        return 1 - strength * (1 - response);
     }
     private static int udpErrors;
     private static byte sequence = 1;
@@ -901,25 +976,7 @@ internal static class WledAmbiPpi
             packet[8] = (byte)(count >> 8);
             packet[9] = (byte)count;
             }
-            // Start at the bottom-left, then travel up the left edge.
-            int corner = config.StartCorner=="top-left" ? 0 :
-                config.StartCorner=="top-right" ? config.TopCount :
-                config.StartCorner=="bottom-right" ? config.TopCount+config.RightCount :
-                config.Leds-config.LeftCount;
-            int firstOutputLed = offset / 3;
-            for(int j=0;j<count;j+=3) {
-                int sourceLed=(firstOutputLed+j/3)%config.Leds;
-                int logical=config.Direction=="reverse" ? (corner+config.Offset-sourceLed+config.Leds*2)%config.Leds : (corner+config.Offset+sourceLed)%config.Leds;
-                int position;
-                if (logical < config.TopCount) position=logical*TopN/config.TopCount;
-                else if ((logical-=config.TopCount) < config.RightCount) position=TopN+logical*RightN/config.RightCount;
-                else if ((logical-=config.RightCount) < config.BottomCount) position=TopN+RightN+logical*BottomN/config.BottomCount;
-                else position=TopN+RightN+BottomN+(logical-config.BottomCount)*LeftN/Math.Max(1,config.LeftCount);
-
-                bool? enabled = position < TopN ? config.Top : position < TopN + RightN ? config.Right :
-                    position < TopN + RightN + BottomN ? config.Bottom : config.Left;
-                if (enabled != false) Buffer.BlockCopy(rgb,position*3,packet,header+j,3);
-            }
+            Buffer.BlockCopy(rgb, offset, packet, header, count);
             udp.Send(packet, packet.Length, endpoint);
             if (preview != null) {
                 for (int i = 0; i < preview.Length / 3; i++) {

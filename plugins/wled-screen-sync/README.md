@@ -1,12 +1,12 @@
 # Ambilight Studio
 
-Samples TV picture colors and sends them to a configured WLED controller over DDP (UDP 4048). Configure the controller's IPv4 address under WLED target. The loopback default keeps output on the TV until configured. The default strip count is 538. Full-picture capture depends on firmware and input mode. The color sampler can provide lower resolution fallback.
+Samples TV picture colors and sends them to a configured WLED controller over DDP (UDP 4048). Configure the controller's IPv4 address under WLED target. Capture starts when a non-loopback controller address is configured. The default strip count is 538. Full-picture capture depends on firmware and input mode. The color sampler can provide lower resolution fallback.
 
-The predecessor, Ambilight 538, ran on a Samsung QN55QN85BAFXZC. Version 0.3.3 was installed and reported running on this TV. Game Mode and source switching can make full-picture capture unavailable.
+On the QN55QN85BAFXZC, 0.6.1 screen sync sent 16 sampled regions with zero reported UDP errors. Both audio modes received PCM from the default device 5 after a reboot confirmed its dump identity. The meters read zero during the initial samples. See the [per-mode observations and ALSA listings](../../tests/manual/wled-screen-sync-qn85b.md) for the test routing and limitations. Game Mode and source switching can make full-picture capture unavailable.
 
 ## Dashboard and discovery
 
-Find WLED controllers sends one local mDNS query for the WLED service. Select an advertisement and apply settings to change the destination. Manual IPv4 entry works when multicast is unavailable. Discovery was verified on a LAN with two controllers.
+Find WLED controllers sends one local mDNS query for the WLED service. Selecting a discovered controller connects immediately. For manual IPv4 entry, use Apply. Reset defaults preserves the connected controller and strip layout. Manual IPv4 entry works when multicast is unavailable. Discovery was verified on a LAN with two controllers.
 
 The strip monitor shows 48 samples from outgoing DDP packets in physical LED order. It refreshes once per second and clears stale output. It shows the transmitted colors, without feedback from the LEDs. Capture diagnostics show scan rate, observed changes, active zones and crop insets.
 
@@ -14,28 +14,42 @@ Color accent picks the depth sample with the strongest chroma. Highlight picks t
 
 ## Output and strip layout
 
-Simple view provides daily lighting controls. Advanced view adds capture diagnostics and per-side LED counts and switches. Output supports 1–4096 RGB pixels over DDP or WLED DNRGB. Screen sync samples up to 538 zones. The prior WLED segment state is saved before streaming begins and restored when the shard leaves streaming mode or stops.
+Simple view provides daily lighting controls. Advanced view adds capture diagnostics and per-side LED counts and switches. Output supports 1–4096 RGB pixels over DDP or WLED DNRGB. Screen sync samples up to 538 zones. Realtime output leaves WLED segment settings alone. If the controller needs powering on, the shard saves its prior power state in Vetro config before sending the command. It restores that field on target change or shard stop. Failed restores stay pending.
 
-The available modes are Screen sync, Screen + TV audio, and TV audio sync. TV audio sync captures the TV PCM output locally and generates reactive LED colors. Screen + TV audio combines picture and live audio by changing intensity only; it never replaces screen colors with an audio palette. Audio sampling offers impact/peaks, balanced, and music/rhythm profiles.
+## Audio response
+
+TV audio sync and Screen + TV audio share a stereo PCM reader. It measures loudness and three frequency bands every 10 ms. Bass emphasizes the low end below about 115 Hz. The source gain adapts over several seconds and holds during silence. Sensitivity controls the resulting levels, and Audio response smoothing controls their rise and decay.
+
+Each audio profile remembers its own effect. Custom exposes detector style, accent threshold, sensitivity and response time. The accent threshold sets the rise above the recent sound level needed to register a hit. Screen + TV audio has a separate Profile effect for each profile, defaulting to Picture intensity only.
+
+- **Balanced** follows the full-range level for speech and general viewing.
+- **Music** combines sustained loudness with short accents from rises in full-range and bass energy. The center pulse can expand on a drum hit during an already loud passage.
+- **Impact** responds to new hits and decays on a steady sound. Beat flash uses the onset detector in all three profiles.
+
+Center pulse expands radially from the center of the picture. Each LED is placed on the TV rectangle using its edge and its index on that edge. Opposite edge counts estimate width and height assuming equal LED spacing. A missing axis uses a 16∶9 estimate. In Spectrum, bass, midrange and treble each set a radius from that same center. The illuminated area grows and recedes with the bands. Bass wave follows low frequencies around the perimeter, Beat flash lights on attacks, and Ambient uses a slower moving glow. Audio-only output uses blue, teal and cool white. At full combined intensity, Screen + TV audio shows the sampled picture colors only inside the reaction. Outside it the LEDs go dark, with a soft fade at the boundary. Mode transitions blend the brightness multiplier on the current picture. Combined audio intensity at zero gives the original picture output.
+
+In Screen + TV audio, choose **Picture intensity only** to apply one audio-driven brightness multiplier to all sampled colors. At full combined intensity, silence goes dark and moderate accents can reach full picture brightness. At zero combined intensity the picture stays at its original brightness. TV audio sync keeps its own selected reaction.
+
+The dashboard reports the signal state and received PCM bytes. Quiet audio fades out. A stalled recorder fades out and reopens with retry backoff. Switching between the two audio modes keeps the audio stream open. A change in the TV source identifier across two polls reopens capture on the new input.
 
 ## Commands it runs
 
-- `systemctl is-active`, `stop`, `restart`, and `reset-failed` manage the shard's capture service. `systemd-run` runs the bundled helper under `/usr/bin/dotnet`.
-- `cat` reads capture statistics and preview samples. `stat` and `date` check preview freshness.
-- `busctl` queries HDR status from the TV's AV output service.
-- `arecord` captures TV audio from the TV PCM dump device `hw:0,5` for TV audio sync.
-- WLED HTTP `/json/info` uses port 80 without a shell command. UDP output uses DDP port 4048 or WLED DNRGB port 21324.
+- `systemctl is-active`, `stop`, and `reset-failed` manage the shard's capture service. `systemd-run` runs the bundled helper under `/usr/bin/dotnet`.
+- Node reads the helper status and preview with filesystem APIs.
+- `busctl` queries the TV's HDR status during picture capture.
+- Both audio modes read stereo 48 kHz S16_LE PCM from an identified Samsung playback dump. Before each recorder launch the helper reads card 0's ID and capture info (including `/proc/asound/card0/pcm5c/info`). On `sdpaudio` it accepts the exact label `pcm dump0 pcmdump0 codec-5` at device 5 or `pcm dump1 pcmdump1 codec-6` at device 6. The helper checks for the primary label at startup and before each recorder launch. When it observes that label, it ties the device to the current Linux boot and the registered sound device. If Samsung later replaces the primary label with exactly `id: 5` and an empty name, the helper checks that binding before reopening it. A conflicting name or a changed device invalidates the match. The helper uses `/usr/bin/stat` to read the sysfs and device-node identities. It keeps the verified binding in memory and saves it as a privileged extended attribute on `runtime/` when the filesystem supports it. The dump can return silence depending on the TV route. PCM is processed in memory. Only derived levels, byte counts, and lighting output are retained. Audio samples are never written to disk or sent to WLED.
+- The shard uses HTTP port 80 for `GET /json/info`, `GET /json/state` and `POST /json/state`. UDP output uses DDP port 4048 or WLED DNRGB port 21324.
 - The helper runs as root and reads the video plane through Samsung private libraries (`libvideo-capture`, `libvideoenhance`) plus vconf `memory/system/source_type`.
 - The helper is 32-bit-only. It refuses 64-bit runtimes before native pointer access. If startup fails, Vetro retries with backoff and gives up after five attempts until Start is pressed again.
-- Runtime files are kept below this Shard's private `runtime/` directory: `rate.txt`, `preview.b64`, and HDR state. The directory is 0700 and symlinks are refused.
+- The private 0700 `runtime/` directory contains `rate.txt` and `preview.b64`. The shard refuses a symlink at that directory. The shard folder contains `hdr-state`, `picture-recovery-until`, config, and the installed helper DLL and runtime manifests.
 
 ## Building the helper
 
-Use the pinned SDK 8.0.100:
+Run both commands with the pinned .NET SDK 8.0.100.
 
 ```
 node scripts/build-wled-screen-sync-helper.cjs
 node scripts/build-wled-screen-sync-helper.cjs --check
 ```
 
-The build compiles `Colour.cs`, `VideoPlaneCapture.cs`, and `Tuning.cs` through `helpers/wled-screen-sync/WledScreenSync.csproj`, then writes `payload.b64`, `Colour.runtimeconfig.json`, and `Colour.deps.json` beside the Shard source. CI rebuilds the helper and compares the generated DLL SHA-256 to the embedded payload.
+The build compiles `PlaybackBinding.cs`, `Audio.cs`, `Colour.cs`, `VideoPlaneCapture.cs`, and `Tuning.cs` through `helpers/wled-screen-sync/WledScreenSync.csproj`, then writes `payload.b64`, `Colour.runtimeconfig.json`, and `Colour.deps.json` beside the Shard source. CI rebuilds the helper and compares the generated DLL SHA-256 to the embedded payload.

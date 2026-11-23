@@ -32,10 +32,15 @@ internal sealed class Tuning
     [DataMember(IsRequired=true)] public string ZonesMode = "match";
     [DataMember] public string Lighting = "screen";
     [DataMember] public string Protocol = "ddp";
+    [DataMember] public string ImpactEffect, BalancedEffect, MusicEffect, CustomDetector;
+    [DataMember] public int CustomThreshold;
+    public double AccentThreshold = 0.29;
+    [DataMember] public string PictureImpactEffect, PictureBalancedEffect, PictureMusicEffect, PictureAudioReaction;
     [DataMember] public string AudioReaction = "spectrum";
     [DataMember] public int AudioSensitivity = 100;
     [DataMember] public int AudioBlend = 35;
     [DataMember] public string AudioSampling = "balanced";
+    [DataMember] public int AudioResponse = 160;
     [DataMember] public bool? Top;
     [DataMember] public bool? Right;
     [DataMember] public bool? Bottom;
@@ -44,6 +49,7 @@ internal sealed class Tuning
     [DataMember] public int RightCount = 97;
     [DataMember] public int BottomCount = 172;
     [DataMember] public int LeftCount = 97;
+    public bool HasTarget { get { return !Wled.StartsWith("127.", StringComparison.Ordinal); } }
     public int EffectiveZones { get { return ZonesMode=="match" ? Math.Min(538,Leds) : Zones; } }
     [DataMember(IsRequired=true)] public string StartCorner = "bottom-left";
     private byte[] redCurve, greenCurve, blueCurve;
@@ -58,11 +64,27 @@ internal sealed class Tuning
                 var serializer=new DataContractJsonSerializer(typeof(Tuning));
                 var t=(Tuning)serializer.ReadObject(stream);
                 if (t.SendHz<5 || t.CaptureHz<5 || t.Depth<4 || t.Offset<0 || t.Offset>4095 || t.Leds<1 || t.Leds>4096 || t.Zones<4 || t.Zones>512 || (t.ZonesMode!="match" && t.ZonesMode!="custom") || string.IsNullOrEmpty(t.Wled)) return previous;
+                if (t.TopCount < 0 || t.RightCount < 0 || t.BottomCount < 0 || t.LeftCount < 0 ||
+                    Math.Max(Math.Max(t.TopCount, t.RightCount), Math.Max(t.BottomCount, t.LeftCount)) > t.Leds) return previous;
                 if (t.TopCount+t.RightCount+t.BottomCount+t.LeftCount != t.Leds) return previous;
                 if (String.IsNullOrEmpty(t.Lighting)) t.Lighting="screen";
                 if (String.IsNullOrEmpty(t.AudioReaction)) t.AudioReaction="spectrum";
                 t.AudioSensitivity=Math.Max(25,Math.Min(300,t.AudioSensitivity));
                 t.AudioBlend=Math.Max(0,Math.Min(100,t.AudioBlend));
+                t.AudioResponse=Math.Max(40,Math.Min(600,t.AudioResponse==0?160:t.AudioResponse));
+                string pictureEffect=t.AudioSampling=="custom"?t.PictureAudioReaction:
+                    t.AudioSampling=="impact"?t.PictureImpactEffect:t.AudioSampling=="music"?t.PictureMusicEffect:t.PictureBalancedEffect;
+                if (t.AudioSampling=="custom") {
+                    t.AudioSampling=t.CustomDetector;
+                    t.AccentThreshold=Math.Max(10,Math.Min(90,t.CustomThreshold))/100.0;
+                } else {
+                    bool impact=t.AudioSampling=="impact", music=t.AudioSampling=="music";
+                    t.AudioReaction=(impact?t.ImpactEffect:music?t.MusicEffect:t.BalancedEffect) ?? t.AudioReaction;
+                    t.AudioSensitivity=100;
+                    t.AudioResponse=impact?115:music?145:190;
+                    t.AccentThreshold=impact?0.52:music?0.22:0.32;
+                }
+                if (t.Lighting=="screen-audio") t.AudioReaction=pictureEffect ?? "intensity";
                 if (t.AudioSampling!="impact" && t.AudioSampling!="music") t.AudioSampling="balanced";
                 t.redCurve=t.Curve(t.Red); t.greenCurve=t.Curve(t.Green); t.blueCurve=t.Curve(t.Blue);
                 lastJson=json;
@@ -86,6 +108,17 @@ internal sealed class Tuning
             if(Math.Max(r,Math.Max(g,b))<=Black) {rgb[i]=rgb[i+1]=rgb[i+2]=0;continue;}
             int y=(54*r+183*g+19*b+128)>>8;
             rgb[i]=redCurve[Adjust(r,y)];rgb[i+1]=greenCurve[Adjust(g,y)];rgb[i+2]=blueCurve[Adjust(b,y)];
+        }
+    }
+    // Audio palettes are deliberately authored with restrained hues. Apply
+    // brightness, gamma and white balance, but leave image saturation tuning
+    // out so a vivid screen setting cannot turn audio colors neon.
+    public void ApplyAudio(byte[] rgb)
+    {
+        if(redCurve==null)return;
+        for(int i=0;i<rgb.Length;i+=3){
+            if(Math.Max(rgb[i],Math.Max(rgb[i+1],rgb[i+2]))<=Black){rgb[i]=rgb[i+1]=rgb[i+2]=0;continue;}
+            rgb[i]=redCurve[rgb[i]];rgb[i+1]=greenCurve[rgb[i+1]];rgb[i+2]=blueCurve[rgb[i+2]];
         }
     }
     private int Adjust(int channel,int luma)

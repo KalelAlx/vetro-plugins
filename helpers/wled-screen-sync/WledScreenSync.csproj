@@ -18,6 +18,8 @@
     <PathMap>$(RepositoryRoot)=/_/vetro-plugins</PathMap>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../../plugins/wled-screen-sync/PlaybackBinding.cs" />
+    <Compile Include="../../plugins/wled-screen-sync/Audio.cs" />
     <Compile Include="../../plugins/wled-screen-sync/Colour.cs" />
     <Compile Include="../../plugins/wled-screen-sync/VideoPlaneCapture.cs" />
     <Compile Include="../../plugins/wled-screen-sync/Tuning.cs" />
