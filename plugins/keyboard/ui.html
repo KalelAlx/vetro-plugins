@@ -151,6 +151,16 @@ body {
   border-color: rgba(143, 186, 255, .4);
   color: var(--link);
 }
+.status-badge.is-retryable {
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: filter .12s, transform .05s;
+}
+.status-badge.is-retryable:hover { filter: brightness(1.15); }
+.status-badge.is-retryable:active { transform: scale(.97); }
+.status-badge.is-retryable:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 
 .btn-collapse {
   width: 28px;
@@ -1199,8 +1209,13 @@ var wsConnecting = false;
 var wsMouseReady = false;
 var activePort = 8002;
 var activeHoldKey = null;
-var authRetryCount = 0;
-var MAX_AUTH_RETRIES = 3;
+var authAttempts = 0;
+var MAX_AUTH_ATTEMPTS = 2;
+var authRetryTimer = null;
+var wsOpenedOnce = false;
+var statusCanRetry = false;
+var lastRetryStatus = null;
+var statusRestoreTimer = null;
 
 var isTouch = ("ontouchstart" in window) || (navigator.maxTouchPoints > 0);
 var isMobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
@@ -1254,39 +1269,99 @@ if (btnCopyCert) {
 
 if (btnReconnect) {
   btnReconnect.onclick = function () {
-    authRetryCount = 0;
-    setStatus("Connecting…", "busy");
-    if (ws) { try { ws.close(); } catch (e) {} }
-    wsConnected = false;
-    wsConnecting = false;
-    initWS();
+    retryPairing();
   };
 }
 
 if (btnRepair) {
   btnRepair.onclick = function () {
-    authRetryCount = 0;
+    if (authRetryTimer) {
+      clearTimeout(authRetryTimer);
+      authRetryTimer = null;
+    }
+    authAttempts = 0;
     tvToken = null;
+    lastRetryStatus = null;
+    setStatus("Resetting pairing…", "busy");
     fetch("savetoken", {
       method: "POST",
       headers: { "Content-Type": "text/plain" },
       body: JSON.stringify({ reset: true })
     }).then(function () {
-      setStatus("Pairing reset. Reconnecting…", "busy");
-      if (ws) { try { ws.close(); } catch (e) {} }
-      wsConnected = false;
-      wsConnecting = false;
-      initWS();
+      retryPairing();
     }).catch(function () {
-      initWS();
+      retryPairing();
     });
   };
 }
 
-function setStatus(msg, cls) {
+function setStatus(msg, cls, canRetry) {
+  if (statusRestoreTimer) {
+    clearTimeout(statusRestoreTimer);
+    statusRestoreTimer = null;
+  }
+  statusCanRetry = !!canRetry;
   statusEl.textContent = msg;
-  statusEl.className = "status-badge" + (cls ? " " + cls : "");
-  statusEl.title = msg;
+  statusEl.className = "status-badge" + (cls ? " " + cls : "") + (statusCanRetry ? " is-retryable" : "");
+  if (statusCanRetry) {
+    lastRetryStatus = { msg: msg, cls: cls };
+    statusEl.setAttribute("role", "button");
+    statusEl.setAttribute("tabindex", "0");
+    statusEl.title = msg + " — Tap to retry pairing";
+  } else {
+    statusEl.removeAttribute("role");
+    statusEl.removeAttribute("tabindex");
+    statusEl.title = msg;
+    if (cls === "ok" && wsConnected) {
+      lastRetryStatus = null;
+    } else if (!wsConnected && !wsConnecting && lastRetryStatus) {
+      statusRestoreTimer = setTimeout(function () {
+        statusRestoreTimer = null;
+        if (!wsConnected && !wsConnecting && lastRetryStatus) {
+          setStatus(lastRetryStatus.msg, lastRetryStatus.cls, true);
+        }
+      }, 2500);
+    }
+  }
+}
+
+function retryPairing() {
+  if (authRetryTimer) {
+    clearTimeout(authRetryTimer);
+    authRetryTimer = null;
+  }
+  if (statusRestoreTimer) {
+    clearTimeout(statusRestoreTimer);
+    statusRestoreTimer = null;
+  }
+  authAttempts = 0;
+  var prevWs = ws;
+  ws = null;
+  if (prevWs) {
+    try { prevWs.close(); } catch (e) {}
+  }
+  wsConnected = false;
+  wsConnecting = false;
+  wsMouseReady = false;
+  initWS();
+}
+
+if (statusEl) {
+  statusEl.addEventListener("click", function (e) {
+    if (!statusCanRetry) return;
+    e.stopPropagation();
+    retryPairing();
+    try { statusEl.blur(); } catch (err) {}
+  });
+  statusEl.addEventListener("keydown", function (e) {
+    if (!statusCanRetry) return;
+    if (e.key === "Enter" || e.key === " " || e.keyCode === 13 || e.keyCode === 32) {
+      e.preventDefault();
+      e.stopPropagation();
+      retryPairing();
+      try { statusEl.blur(); } catch (err) {}
+    }
+  });
 }
 
 function utf8b64(str) {
@@ -1426,9 +1501,15 @@ function sendKey(key, shift, ctrl) {
 }
 
 function initWS() {
-  if (wsConnected) return;
-  if (wsConnecting) return;
+  if (wsConnected || wsConnecting) return;
+  if (authRetryTimer) {
+    clearTimeout(authRetryTimer);
+    authRetryTimer = null;
+  }
   wsConnecting = true;
+  authAttempts++;
+  var attemptNum = authAttempts;
+  var authHandled = false;
   setStatus("Connecting to TV…", "busy");
 
   var port = 8002;
@@ -1446,31 +1527,53 @@ function initWS() {
     wsConnecting = false;
     wsConnected = false;
     certBanner.style.display = "block";
-    setStatus("Cert required", "warn");
+    setStatus("Cert required ↻", "warn", true);
     return;
   }
 
   var opened = false;
   var connTimer = setTimeout(function () {
-    if (!opened && wsConnecting && ws === currentWs) {
+    if (ws !== currentWs) return;
+    if (!opened && wsConnecting) {
       try { currentWs.close(); } catch (e) {}
       wsConnecting = false;
       certBanner.style.display = "block";
-      setStatus("Cert required", "warn");
+      setStatus("Cert required ↻", "warn", true);
     }
   }, 3500);
 
+  function handleAuthFailure(reason) {
+    if (authHandled) return;
+    authHandled = true;
+    clearTimeout(connTimer);
+    wsConnected = false;
+    wsConnecting = false;
+    wsMouseReady = false;
+    if (attemptNum < MAX_AUTH_ATTEMPTS) {
+      setStatus((reason === "denied" ? "Pairing denied" : "Pairing timeout") + " (" + attemptNum + "/" + MAX_AUTH_ATTEMPTS + ")", "warn", true);
+      authRetryTimer = setTimeout(function () {
+        authRetryTimer = null;
+        initWS();
+      }, 2000);
+    } else {
+      setStatus(reason === "denied" ? "Pairing denied ↻" : "Pairing timed out ↻", "err", true);
+    }
+  }
+
   currentWs.onopen = function () {
+    if (ws !== currentWs) return;
     opened = true;
+    wsOpenedOnce = true;
     clearTimeout(connTimer);
     if (!tvToken) {
-      setStatus("Select 'Allow' on TV", "warn");
+      setStatus("Select 'Allow' (" + attemptNum + "/" + MAX_AUTH_ATTEMPTS + ")", "warn");
     } else {
       setStatus("Authenticating…", "busy");
     }
   };
 
   currentWs.onmessage = function (e) {
+    if (ws !== currentWs) return;
     try {
       var msg = JSON.parse(e.data);
       if (msg.event === "ms.channel.connect") {
@@ -1478,7 +1581,8 @@ function initWS() {
         wsConnecting = false;
         wsMouseReady = false;
         activePort = 8002;
-        authRetryCount = 0;
+        authAttempts = 0;
+        lastRetryStatus = null;
         try {
           currentWs.send(JSON.stringify({
             method: "ms.remote.control",
@@ -1498,38 +1602,35 @@ function initWS() {
         setStatus("Connected ✔ Ready", "ok");
         certBanner.style.display = "none";
       } else if (msg.event === "ms.channel.unauthorized") {
-        wsConnected = false;
-        wsConnecting = false;
-        wsMouseReady = false;
         tvToken = null;
         fetch("savetoken", {
           method: "POST",
           headers: { "Content-Type": "text/plain" },
           body: JSON.stringify({ reset: true })
         }).catch(function () {});
-        authRetryCount++;
-        if (authRetryCount <= MAX_AUTH_RETRIES) {
-          setStatus("Pairing denied (" + authRetryCount + "/" + MAX_AUTH_RETRIES + ")", "warn");
-          setTimeout(function () { initWS(); }, 2000);
-        } else {
-          setStatus("Pairing denied", "err");
-        }
+        try { currentWs.close(); } catch (cErr) {}
+        handleAuthFailure("denied");
+      } else if (msg.event === "ms.channel.timeOut") {
+        try { currentWs.close(); } catch (tErr) {}
+        handleAuthFailure("timeout");
       }
     } catch (err) {}
   };
 
   currentWs.onerror = function () {
+    if (ws !== currentWs) return;
     clearTimeout(connTimer);
     wsConnected = false;
     wsConnecting = false;
     wsMouseReady = false;
     if (!opened) {
       certBanner.style.display = "block";
-      setStatus("Cert required", "warn");
+      setStatus("Cert required ↻", "warn", true);
     }
   };
 
   currentWs.onclose = function () {
+    if (ws !== currentWs) return;
     clearTimeout(connTimer);
     var wasConn = wsConnected;
     wsConnected = false;
@@ -1537,17 +1638,11 @@ function initWS() {
     wsMouseReady = false;
     if (!opened) {
       certBanner.style.display = "block";
-      setStatus("Cert required", "warn");
+      setStatus("Cert required ↻", "warn", true);
     } else if (!wasConn) {
-      authRetryCount++;
-      if (authRetryCount <= MAX_AUTH_RETRIES) {
-        setStatus("Pairing timeout (" + authRetryCount + "/" + MAX_AUTH_RETRIES + ")", "warn");
-        setTimeout(function () { initWS(); }, 2000);
-      } else {
-        setStatus("Pairing timed out", "err");
-      }
+      handleAuthFailure("timeout");
     } else {
-      setStatus("Disconnected", "warn");
+      setStatus("Disconnected ↻", "warn", true);
     }
   };
 }
@@ -1642,9 +1737,13 @@ function sendText(text, submit) {
       })
       .catch(function () { setStatus("Network error", "err"); });
   } else {
-    certBanner.style.display = "block";
-    setStatus("Unicode text input requires TV certificate approval (see banner above)", "warn");
-    initWS();
+    if (!wsOpenedOnce) {
+      certBanner.style.display = "block";
+      setStatus("Unicode requires TV permission (see banner)", "warn", true);
+    } else {
+      setStatus("Retrying TV connection…", "busy");
+    }
+    retryPairing();
   }
 }
 
