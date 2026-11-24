@@ -2210,9 +2210,6 @@ function toggleKeyboardCollapse(e) {
   if (e && e.target && (e.target.closest("#status") || e.target.closest("a") || e.target.closest("input"))) return;
   var collapsed = boxKeyboard.classList.toggle("is-collapsed");
   btnToggleKeyboard.setAttribute("aria-expanded", collapsed ? "false" : "true");
-  try {
-    localStorage.setItem("vetro_keyboard_collapsed", collapsed ? "1" : "0");
-  } catch (err) {}
 }
 
 if (btnToggleKeyboard && boxKeyboard) {
@@ -2223,12 +2220,6 @@ if (btnToggleKeyboard && boxKeyboard) {
   if (keyboardHeader) {
     keyboardHeader.addEventListener("click", toggleKeyboardCollapse);
   }
-  try {
-    if (localStorage.getItem("vetro_keyboard_collapsed") === "1") {
-      boxKeyboard.classList.add("is-collapsed");
-      btnToggleKeyboard.setAttribute("aria-expanded", "false");
-    }
-  } catch (err) {}
 }
 
 var boxPlayback = document.getElementById("box-playback");
@@ -2239,9 +2230,6 @@ function togglePlaybackCollapse(e) {
   if (e && e.target && (e.target.closest("a") || e.target.closest("button:not(.btn-collapse)"))) return;
   var collapsed = boxPlayback.classList.toggle("is-collapsed");
   btnTogglePlayback.setAttribute("aria-expanded", collapsed ? "false" : "true");
-  try {
-    localStorage.setItem("vetro_playback_collapsed", collapsed ? "1" : "0");
-  } catch (err) {}
 }
 
 if (btnTogglePlayback && boxPlayback) {
@@ -2252,12 +2240,6 @@ if (btnTogglePlayback && boxPlayback) {
   if (playbackHeader) {
     playbackHeader.addEventListener("click", togglePlaybackCollapse);
   }
-  try {
-    if (localStorage.getItem("vetro_playback_collapsed") === "1") {
-      boxPlayback.classList.add("is-collapsed");
-      btnTogglePlayback.setAttribute("aria-expanded", "false");
-    }
-  } catch (err) {}
 }
 
 // Screen preview, interactive pointer / D-Pad, standalone tab & fullscreen orientation logic
@@ -2292,6 +2274,7 @@ var btnRotateScreen = document.getElementById("btn-rotate-screen");
 var btnNativeFs = document.getElementById("btn-native-fs");
 var btnTheaterInput = document.getElementById("btn-theater-input");
 var theaterInputActive = false;
+var theaterInputSet = false;
 
 var btnModePointer = document.getElementById("btn-mode-pointer");
 var btnModeDpad = document.getElementById("btn-mode-dpad");
@@ -2383,9 +2366,9 @@ function setRotatedLandscape(on) {
 
 function setTheaterInput(on) {
   theaterInputActive = !!on;
+  theaterInputSet = true;
   document.body.classList.toggle("has-theater-input", theaterInputActive);
   if (btnTheaterInput) btnTheaterInput.classList.toggle("active", theaterInputActive);
-  try { localStorage.setItem("vetro_theater_input", theaterInputActive ? "1" : "0"); } catch (e) {}
   setTimeout(fitScreenFrame, 30);
 }
 
@@ -2401,13 +2384,7 @@ function setScreenOnlyMode(on, syncHash) {
     if (!hasScreenImage && !screenCapturing) {
       fetchScreenshot();
     }
-    var savedInput = null;
-    try { savedInput = localStorage.getItem("vetro_theater_input"); } catch (e) {}
-    if (savedInput !== null) {
-      setTheaterInput(savedInput === "1");
-    } else {
-      setTheaterInput(!!isMobile);
-    }
+    setTheaterInput(theaterInputSet ? theaterInputActive : !!isMobile);
   } else {
     document.body.classList.remove("has-theater-input");
     if (btnTheaterInput) btnTheaterInput.classList.remove("active");
@@ -2873,15 +2850,8 @@ function setPreviewMode(mode) {
       ? "D-Pad mode (YouTube & TV apps): Swipe to move focus · Tap edges (▲▼◀▶) or center (OK) · Right-click: Back"
       : "Tap: click · Double-tap: double-click · Hold or drag: press & drag · Right-click or Shift+Wheel supported";
   }
-  try { localStorage.setItem("vetro_preview_mode", previewMode); } catch (e) {}
   if (isScreenOnly) fitScreenFrame();
 }
-
-try {
-  if (localStorage.getItem("vetro_preview_mode") === "dpad") {
-    setPreviewMode("dpad");
-  }
-} catch (e) {}
 
 if (btnModePointer) {
   btnModePointer.onclick = function () { setPreviewMode("pointer"); };

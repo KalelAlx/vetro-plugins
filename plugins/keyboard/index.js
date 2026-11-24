@@ -147,6 +147,9 @@ module.exports = function (ctx) {
     var mouseHoldStarted = 0;
     var mouseInitNode = null;
     var mouseInitTimer = null;
+    var MAX_MOUSE_QUEUE = 8;
+    var mouseBusy = false;
+    var mouseQueue = [];
 
     function findMouseNode() {
         try {
@@ -258,6 +261,117 @@ module.exports = function (ctx) {
         }, 8000);
     }
 
+    function clearMouseQueue() {
+        mouseBusy = false;
+        var queued = mouseQueue;
+        mouseQueue = [];
+        for (var i = 0; i < queued.length; i++) {
+            var q = queued[i];
+            if (q && q.res && !q.res.finished) {
+                try {
+                    q.res.writeHead(503, { 'content-type': 'application/json' });
+                    q.res.end(JSON.stringify({ ok: false, error: 'Shard stopped' }));
+                } catch (e) {}
+            }
+        }
+    }
+
+    function drainMouseQueue() {
+        if (mouseBusy || mouseQueue.length === 0) return;
+        var reqItem = mouseQueue.shift();
+        mouseBusy = true;
+
+        var node = reqItem.node;
+        var action = reqItem.action;
+        var actionCmds = [];
+        if (action === 'move' && reqItem.hasXY) {
+            actionCmds = buildJumpCmds(reqItem.x, reqItem.y);
+            actionCmds[actionCmds.length - 1] = actionCmds[actionCmds.length - 1].replace('--type=method_call', '--print-reply');
+        } else if (action === 'click' && reqItem.hasXY) {
+            actionCmds = buildJumpCmds(reqItem.x, reqItem.y);
+            actionCmds.push(dbusMouse(0, -1, -1, 3, true));
+        } else if (action === 'clickInPlace') {
+            actionCmds = [dbusMouse(0, -1, -1, 3, true)];
+        } else if (action === 'dblclick' && reqItem.hasXY) {
+            actionCmds = buildJumpCmds(reqItem.x, reqItem.y);
+            actionCmds.push(dbusMouse(0, -1, -1, 3), 'usleep 60000', dbusMouse(0, -1, -1, 3, true));
+        } else if (action === 'rightclick' && reqItem.hasXY) {
+            actionCmds = buildJumpCmds(reqItem.x, reqItem.y);
+            actionCmds.push(dbusMouse(1, -1, -1, 3, true));
+        } else if (action === 'down' && reqItem.hasXY) {
+            actionCmds = buildJumpCmds(reqItem.x, reqItem.y);
+            actionCmds.push(dbusMouse(0, -1, -1, 1, true));
+            startMouseHoldTimer(node, false);
+        } else if (action === 'drag') {
+            if (reqItem.dx === 0 && reqItem.dy === 0) {
+                if (reqItem.res && !reqItem.res.finished) {
+                    try {
+                        reqItem.res.writeHead(200, { 'content-type': 'application/json' });
+                        reqItem.res.end(JSON.stringify({ ok: true }));
+                    } catch (e) {}
+                }
+                mouseBusy = false;
+                drainMouseQueue();
+                return;
+            }
+            if (mouseHeldNode) {
+                startMouseHoldTimer(mouseHeldNode, true);
+            }
+            actionCmds = [dbusMouse(0, reqItem.dx, reqItem.dy, 2, true)];
+        } else if (action === 'up') {
+            actionCmds = [dbusMouse(0, -1, -1, 0, true)];
+            clearMouseHoldTimer();
+            mouseHeldNode = null;
+            mouseHoldStarted = 0;
+        } else if (action === 'wheel') {
+            if (reqItem.hasXY) actionCmds = buildJumpCmds(reqItem.x, reqItem.y);
+            actionCmds.push(dbusMouse(3, reqItem.w, -1, 2, true));
+        }
+
+        var initCmd = dbusWm('init_device', 'uint32:0 string:' + node, true);
+        var needInit = (mouseInitNode !== node);
+        var runList = needInit ? [initCmd].concat(actionCmds) : actionCmds;
+        touchMouseInit(node);
+
+        function finishItem(ok, stderr, errMsg) {
+            if (reqItem.res && !reqItem.res.finished) {
+                try {
+                    reqItem.res.writeHead(200, { 'content-type': 'application/json' });
+                    reqItem.res.end(errMsg !== undefined
+                        ? JSON.stringify({ ok: false, error: errMsg })
+                        : JSON.stringify({ ok: !!ok, stderr: stderr }));
+                } catch (e) {}
+            }
+            mouseBusy = false;
+            drainMouseQueue();
+        }
+
+        function onOk(r) {
+            if (!r || r.exit_code !== 0) {
+                mouseInitNode = null;
+            }
+            finishItem(r && r.exit_code === 0, r && r.stderr);
+        }
+
+        function onErr(e) {
+            mouseInitNode = null;
+            finishItem(false, undefined, e ? e.message : 'mouse command failed');
+        }
+
+        try {
+            ctx.execute(runShell(runList), 5000).then(function (r) {
+                if (!needInit && r && typeof r.stdout === 'string' && r.stdout.indexOf('Initialize device first') !== -1) {
+                    touchMouseInit(node);
+                    ctx.execute(runShell([initCmd].concat(actionCmds)), 5000).then(onOk, onErr);
+                    return;
+                }
+                onOk(r);
+            }, onErr);
+        } catch (e) {
+            onErr(e);
+        }
+    }
+
     function stopHold() {
         if (activeHoldTimer) {
             clearTimeout(activeHoldTimer);
@@ -330,29 +444,28 @@ module.exports = function (ctx) {
     var STOP_STREAM_CMD = "if [ -f " + STREAM_PID_FILE + " ]; then " +
         "pid=$(cat " + STREAM_PID_FILE + " 2>/dev/null); " +
         "case \"$pid\" in ''|*[!0-9]*) ;; *) " +
-        "if tr '\\0' ' ' < /proc/\"$pid\"/cmdline 2>/dev/null | grep -q 'tcpserversink.*18888'; then " +
+        "if tr '\\0' ' ' < /proc/\"$pid\"/cmdline 2>/dev/null | grep -q 'tcpclientsink.*127\\.0\\.0\\.1'; then " +
         "kill \"$pid\" 2>/dev/null; sleep 0.15; kill -9 \"$pid\" 2>/dev/null; " +
         "fi ;; esac; " +
         "rm -f " + STREAM_PID_FILE + "; fi";
 
     var streamClients = [];
     var streamProcRunning = false;
-    var streamConnecting = false;
+    var streamServer = null;
+    var streamPort = 0;
     var streamTcpSocket = null;
     var lastFrame = null;
     var lastFrameTime = 0;
     var streamKillTimer = null;
-    var streamConnectTimer = null;
-    var streamRetryTimer = null;
+    var streamNoConnectTimer = null;
     var streamRestartTimer = null;
-    var streamRetryCount = 0;
     var streamPipelineRestarts = 0;
     var streamGeneration = 0;
     var streamPreset = 'balanced';
     var streamWidth = STREAM_PRESETS.balanced.width;
     var streamHeight = STREAM_PRESETS.balanced.height;
     var streamQuality = STREAM_PRESETS.balanced.quality;
-    var screenshotWaiters = {};
+    var screenshotWaiters = null;
 
     function isFiniteQuality(v) {
         return (typeof v === 'number' || (typeof v === 'string' && v.trim() !== '')) && isFinite(Number(v));
@@ -397,21 +510,20 @@ module.exports = function (ctx) {
             streamRestartTimer = null;
             try {
                 if (streamClients.length === 0) return;
-                if (streamConnectTimer) {
-                    clearTimeout(streamConnectTimer);
-                    streamConnectTimer = null;
-                }
-                if (streamRetryTimer) {
-                    clearTimeout(streamRetryTimer);
-                    streamRetryTimer = null;
+                if (streamNoConnectTimer) {
+                    clearTimeout(streamNoConnectTimer);
+                    streamNoConnectTimer = null;
                 }
                 if (streamTcpSocket) {
                     var oldSock = streamTcpSocket;
                     streamTcpSocket = null;
                     try { oldSock.destroy(); } catch (e) {}
                 }
-                streamConnecting = false;
-                streamRetryCount = 0;
+                if (streamServer && streamPort === 0) {
+                    var oldSrv = streamServer;
+                    streamServer = null;
+                    try { oldSrv.close(); } catch (e) {}
+                }
                 streamPipelineRestarts = 0;
                 lastFrame = null;
                 lastFrameTime = 0;
@@ -587,131 +699,171 @@ module.exports = function (ctx) {
         }
     }
 
-    function connectStreamTcp() {
-        if (streamTcpSocket || streamConnecting || streamClients.length === 0 || !streamProcRunning) return;
-        streamConnecting = true;
-
-        var sock;
+    function onStreamSocket(sock) {
         try {
-            sock = net.connect(18888, '127.0.0.1');
-        } catch (e) {
-            streamConnecting = false;
-            return;
-        }
-        streamTcpSocket = sock;
-        if (sock.setNoDelay) sock.setNoDelay(true);
-        var parser = createJpegParser(broadcastFrame);
-
-        sock.on('connect', function () {
-            try {
-                streamConnecting = false;
-                if (!streamProcRunning || streamTcpSocket !== sock || streamClients.length === 0) {
-                    try { sock.destroy(); } catch (e) {}
-                    return;
-                }
-                streamRetryCount = 0;
-                streamPipelineRestarts = 0;
-                if (streamRetryTimer) {
-                    clearTimeout(streamRetryTimer);
-                    streamRetryTimer = null;
-                }
-            } catch (e) {}
-        });
-
-        sock.on('data', parser);
-
-        function handleDisconnect() {
-            try {
-                if (streamTcpSocket !== sock) {
-                    try { sock.destroy(); } catch (e) {}
-                    return;
-                }
-                streamTcpSocket = null;
-                streamConnecting = false;
+            var remote = sock.remoteAddress ? String(sock.remoteAddress).replace(/^::ffff:/i, '') : '';
+            if (remote && remote !== '127.0.0.1') {
                 try { sock.destroy(); } catch (e) {}
-                if (streamClients.length > 0 && streamProcRunning && !streamRetryTimer) {
-                    streamRetryTimer = setTimeout(function () {
-                        streamRetryTimer = null;
-                        try {
-                            if (streamClients.length === 0 || !streamProcRunning) return;
-                            streamRetryCount++;
-                            if (streamRetryCount <= 5) {
-                                connectStreamTcp();
-                            } else if (streamPipelineRestarts < 2) {
-                                streamRetryCount = 0;
-                                streamPipelineRestarts++;
-                                streamProcRunning = false;
-                                startStreamPipeline();
-                            } else {
-                                stopStreamPipeline();
-                                closeAllStreamClients();
-                            }
-                        } catch (e) {}
-                    }, 350);
-                }
-            } catch (e) {}
-        }
+                return;
+            }
+            if (!streamProcRunning || streamClients.length === 0) {
+                try { sock.destroy(); } catch (e) {}
+                return;
+            }
+            if (streamTcpSocket) {
+                var prev = streamTcpSocket;
+                streamTcpSocket = null;
+                try { prev.destroy(); } catch (e) {}
+            }
+            streamTcpSocket = sock;
+            if (streamNoConnectTimer) {
+                clearTimeout(streamNoConnectTimer);
+                streamNoConnectTimer = null;
+            }
+            streamPipelineRestarts = 0;
+            if (sock.setNoDelay) sock.setNoDelay(true);
+            sock.on('data', createJpegParser(broadcastFrame));
 
-        sock.on('error', handleDisconnect);
-        sock.on('close', handleDisconnect);
+            var handleDisconnect = function () {
+                try {
+                    if (streamTcpSocket !== sock) {
+                        try { sock.destroy(); } catch (e) {}
+                        return;
+                    }
+                    streamTcpSocket = null;
+                    try { sock.destroy(); } catch (e) {}
+                    if (streamClients.length > 0 && streamProcRunning && !streamRestartTimer) {
+                        if (streamPipelineRestarts < 1) {
+                            streamPipelineRestarts++;
+                            streamProcRunning = false;
+                            startStreamPipeline();
+                        } else {
+                            stopStreamPipeline();
+                            closeAllStreamClients();
+                        }
+                    }
+                } catch (e) {}
+            };
+
+            sock.on('error', handleDisconnect);
+            sock.on('close', handleDisconnect);
+        } catch (e) {
+            try { sock.destroy(); } catch (e2) {}
+        }
     }
 
-    function startStreamPipeline() {
-        if (streamProcRunning) {
-            if (!streamTcpSocket && !streamConnecting && !streamConnectTimer && !streamRetryTimer) {
-                connectStreamTcp();
-            }
-            return;
-        }
-        streamProcRunning = true;
-        var gen = ++streamGeneration;
+    function launchGst(gen, port) {
+        if (!streamProcRunning || gen !== streamGeneration) return;
         var gstCmd = STOP_STREAM_CMD + "; " +
+            "command -v gst-launch-1.0 >/dev/null 2>&1 || exit 127; " +
             "WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run gst-launch-1.0 -q waylandsrc ! " +
             "video/x-raw,width=1920,height=1080 ! " +
             "videoscale method=0 n-threads=2 ! video/x-raw,width=" + streamWidth + ",height=" + streamHeight + " ! " +
             "videoconvert n-threads=2 ! " +
             "jpegenc quality=" + streamQuality + " idct-method=1 ! " +
-            "tcpserversink host=127.0.0.1 port=18888 sync=false </dev/null >/dev/null 2>&1 & " +
+            "tcpclientsink host=127.0.0.1 port=" + port + " sync=false </dev/null >/dev/null 2>&1 & " +
             "echo $! > " + STREAM_PID_FILE;
-        try {
-            ctx.execute(gstCmd, 5000).then(function (r) {
-                try {
-                    if (!streamProcRunning) {
-                        ctx.execute(STOP_STREAM_CMD, 2000).catch(function () {});
-                        return;
-                    }
-                    if (gen !== streamGeneration) return;
-                    if (r && r.exit_code !== 0) {
-                        stopStreamPipeline();
-                        closeAllStreamClients();
-                    }
-                } catch (e) {}
-            }, function () {
-                try {
-                    if (gen !== streamGeneration) return;
+        if (streamNoConnectTimer) clearTimeout(streamNoConnectTimer);
+        streamNoConnectTimer = setTimeout(function () {
+            streamNoConnectTimer = null;
+            try {
+                if (!streamTcpSocket && streamProcRunning && gen === streamGeneration) {
                     stopStreamPipeline();
                     closeAllStreamClients();
-                } catch (e) {}
+                }
+            } catch (e) {}
+        }, 3500);
+        var onResolve = function (r) {
+            try {
+                if (!streamProcRunning) {
+                    ctx.execute(STOP_STREAM_CMD, 2000).catch(function () {});
+                    return;
+                }
+                if (gen !== streamGeneration) return;
+                if (r && r.exit_code !== 0) {
+                    stopStreamPipeline();
+                    closeAllStreamClients();
+                }
+            } catch (e) {}
+        };
+        var onReject = function () {
+            try {
+                if (!streamProcRunning) {
+                    ctx.execute(STOP_STREAM_CMD, 2000).catch(function () {});
+                    return;
+                }
+                if (gen !== streamGeneration) return;
+                stopStreamPipeline();
+                closeAllStreamClients();
+            } catch (e) {}
+        };
+        try {
+            ctx.execute(gstCmd, 5000).then(onResolve, onReject);
+        } catch (e) {
+            stopStreamPipeline();
+            closeAllStreamClients();
+        }
+    }
+
+    function startStreamPipeline() {
+        if (streamProcRunning) return;
+        streamProcRunning = true;
+        var gen = ++streamGeneration;
+        if (streamServer && streamPort > 0) {
+            launchGst(gen, streamPort);
+            return;
+        }
+        var srv;
+        try {
+            srv = net.createServer(onStreamSocket);
+        } catch (e) {
+            stopStreamPipeline();
+            closeAllStreamClients();
+            return;
+        }
+        streamServer = srv;
+        srv.on('error', function () {
+            try {
+                if (streamServer === srv) {
+                    stopStreamPipeline();
+                    closeAllStreamClients();
+                }
+            } catch (e) {}
+        });
+        try {
+            srv.listen(0, '127.0.0.1', function () {
+                try {
+                    if (!streamProcRunning || gen !== streamGeneration || streamServer !== srv || streamClients.length === 0) {
+                        if (streamServer === srv) {
+                            streamServer = null;
+                            streamPort = 0;
+                        }
+                        try { srv.close(); } catch (e) {}
+                        return;
+                    }
+                    var addr = srv.address();
+                    if (!addr || !addr.port) {
+                        stopStreamPipeline();
+                        closeAllStreamClients();
+                        return;
+                    }
+                    streamPort = addr.port;
+                    launchGst(gen, streamPort);
+                } catch (e) {
+                    stopStreamPipeline();
+                    closeAllStreamClients();
+                }
             });
         } catch (e) {
             stopStreamPipeline();
             closeAllStreamClients();
         }
-        if (streamConnectTimer) clearTimeout(streamConnectTimer);
-        streamConnectTimer = setTimeout(function () {
-            streamConnectTimer = null;
-            try {
-                connectStreamTcp();
-            } catch (e) {}
-        }, 250);
     }
 
     function stopStreamPipeline() {
         var wasRunning = streamProcRunning;
         streamProcRunning = false;
         streamGeneration++;
-        streamConnecting = false;
-        streamRetryCount = 0;
         streamPipelineRestarts = 0;
         lastFrame = null;
         lastFrameTime = 0;
@@ -723,18 +875,20 @@ module.exports = function (ctx) {
             clearTimeout(streamKillTimer);
             streamKillTimer = null;
         }
-        if (streamConnectTimer) {
-            clearTimeout(streamConnectTimer);
-            streamConnectTimer = null;
-        }
-        if (streamRetryTimer) {
-            clearTimeout(streamRetryTimer);
-            streamRetryTimer = null;
+        if (streamNoConnectTimer) {
+            clearTimeout(streamNoConnectTimer);
+            streamNoConnectTimer = null;
         }
         if (streamTcpSocket) {
             var s = streamTcpSocket;
             streamTcpSocket = null;
             try { s.destroy(); } catch (e) {}
+        }
+        if (streamServer) {
+            var srv = streamServer;
+            streamServer = null;
+            streamPort = 0;
+            try { srv.close(); } catch (e) {}
         }
         if (wasRunning) {
             try {
@@ -743,14 +897,14 @@ module.exports = function (ctx) {
         }
     }
 
-    function takeShotWaiters(key) {
-        var list = screenshotWaiters[key];
-        delete screenshotWaiters[key];
+    function takeShotWaiters() {
+        var list = screenshotWaiters;
+        screenshotWaiters = null;
         return list || [];
     }
 
-    function finishShotOk(key, contentType, data) {
-        var list = takeShotWaiters(key);
+    function finishShotOk(contentType, data) {
+        var list = takeShotWaiters();
         for (var i = 0; i < list.length; i++) {
             var r = list[i];
             if (!r || r.finished) continue;
@@ -765,8 +919,8 @@ module.exports = function (ctx) {
         }
     }
 
-    function finishShotErr(key, msg) {
-        var list = takeShotWaiters(key);
+    function finishShotErr(msg) {
+        var list = takeShotWaiters();
         var body = JSON.stringify({ ok: false, error: msg || 'Screenshot capture failed' });
         for (var i = 0; i < list.length; i++) {
             var r = list[i];
@@ -779,42 +933,41 @@ module.exports = function (ctx) {
     }
 
     function clearScreenshotWaiters() {
-        var keys = Object.keys(screenshotWaiters);
-        for (var i = 0; i < keys.length; i++) {
-            finishShotErr(keys[i], 'Shard stopped');
+        if (screenshotWaiters) {
+            finishShotErr('Shard stopped');
         }
     }
 
-    function readAndServeShot(key, filePath, contentType) {
+    function readAndServeShot(filePath, contentType) {
         fs.readFile(filePath, function (err, data) {
             unlinkFile(filePath);
             if (err) {
-                finishShotErr(key, err.message);
+                finishShotErr(err.message);
                 return;
             }
-            finishShotOk(key, contentType, data);
+            finishShotOk(contentType, data);
         });
     }
 
-    function runScreenshotCapture(key, shotQual, isScaled) {
+    function runScreenshotCapture() {
         var shotId = Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
         var shotPath = '/tmp/shot_' + shotId + '.jpg';
         var shotFallbackPath = '/tmp/shot_' + shotId + '.png';
-        var scalePart = isScaled ? ' ! videoscale method=0 ! video/x-raw,width=960,height=540' : '';
-        var gstCmd = "WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run gst-launch-1.0 -q waylandsrc num-buffers=1 ! video/x-raw,width=1920,height=1080" + scalePart + " ! videoconvert ! jpegenc quality=" + shotQual + " ! filesink location='" + shotPath + "'";
+        var gstCmd = "WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run gst-launch-1.0 -q waylandsrc num-buffers=1 ! video/x-raw,width=1920,height=1080 ! videoconvert ! jpegenc quality=85 ! filesink location='" + shotPath + "'";
         var dbusCmd = "dbus-send --system --print-reply --dest=org.enlightenment.wm /org/enlightenment/wm org.enlightenment.wm.info.dump_screen string:'" + shotFallbackPath + "'";
 
         function fallbackDbus() {
+            if (!screenshotWaiters) return;
             ctx.execute(dbusCmd, 10000).then(function (r) {
                 if (!r || r.exit_code !== 0) {
                     unlinkFile(shotFallbackPath);
-                    finishShotErr(key, (r && r.stderr) || 'Screenshot capture failed');
+                    finishShotErr((r && r.stderr) || 'Screenshot capture failed');
                     return;
                 }
-                readAndServeShot(key, shotFallbackPath, 'image/png');
+                readAndServeShot(shotFallbackPath, 'image/png');
             }, function (e) {
                 unlinkFile(shotFallbackPath);
-                finishShotErr(key, e ? e.message : 'Screenshot capture failed');
+                finishShotErr(e ? e.message : 'Screenshot capture failed');
             });
         }
 
@@ -822,7 +975,7 @@ module.exports = function (ctx) {
             if (r && r.exit_code === 0) {
                 fs.stat(shotPath, function (err, stat) {
                     if (!err && stat && stat.size > 1000) {
-                        readAndServeShot(key, shotPath, 'image/jpeg');
+                        readAndServeShot(shotPath, 'image/jpeg');
                         return;
                     }
                     unlinkFile(shotPath);
@@ -923,6 +1076,7 @@ module.exports = function (ctx) {
 
         stop: function () {
             stopHold();
+            clearMouseQueue();
             stopMouseHold(true);
             closeAllStreamClients();
             stopStreamPipeline();
@@ -1181,78 +1335,56 @@ module.exports = function (ctx) {
                     var hasXY = (typeof parsed.x === 'number' && typeof parsed.y === 'number' && isFinite(parsed.x) && isFinite(parsed.y));
                     var x = hasXY ? Math.max(0, Math.min(1919, Math.round(parsed.x))) : 0;
                     var y = hasXY ? Math.max(0, Math.min(1079, Math.round(parsed.y))) : 0;
-                    var actionCmds = [];
+                    var dx = 0;
+                    var dy = 0;
+                    var w = -1;
 
-                    if (action === 'move' && hasXY) {
-                        actionCmds = buildJumpCmds(x, y);
-                        actionCmds[actionCmds.length - 1] = actionCmds[actionCmds.length - 1].replace('--type=method_call', '--print-reply');
-                    } else if (action === 'click' && hasXY) {
-                        actionCmds = buildJumpCmds(x, y);
-                        actionCmds.push(dbusMouse(0, -1, -1, 3, true));
-                    } else if (action === 'clickInPlace') {
-                        actionCmds = [dbusMouse(0, -1, -1, 3, true)];
-                    } else if (action === 'dblclick' && hasXY) {
-                        actionCmds = buildJumpCmds(x, y);
-                        actionCmds.push(dbusMouse(0, -1, -1, 3), 'usleep 60000', dbusMouse(0, -1, -1, 3, true));
-                    } else if (action === 'rightclick' && hasXY) {
-                        actionCmds = buildJumpCmds(x, y);
-                        actionCmds.push(dbusMouse(1, -1, -1, 3, true));
-                    } else if (action === 'down' && hasXY) {
-                        actionCmds = buildJumpCmds(x, y);
-                        actionCmds.push(dbusMouse(0, -1, -1, 1, true));
-                        startMouseHoldTimer(node, false);
+                    if ((action === 'move' || action === 'click' || action === 'dblclick' || action === 'rightclick' || action === 'down') && hasXY) {
+                        // valid positional action
+                    } else if (action === 'clickInPlace' || action === 'up') {
+                        // valid non-positional action
                     } else if (action === 'drag') {
-                        var dx = Math.max(-2000, Math.min(2000, Math.round(Number(parsed.dx) || 0)));
-                        var dy = Math.max(-2000, Math.min(2000, Math.round(Number(parsed.dy) || 0)));
+                        dx = Math.max(-2000, Math.min(2000, Math.round(Number(parsed.dx) || 0)));
+                        dy = Math.max(-2000, Math.min(2000, Math.round(Number(parsed.dy) || 0)));
                         if (dx === 0 && dy === 0) {
                             res.writeHead(200, { 'content-type': 'application/json' });
                             res.end(JSON.stringify({ ok: true }));
                             return;
                         }
-                        if (mouseHeldNode) {
-                            startMouseHoldTimer(mouseHeldNode, true);
-                        }
-                        actionCmds = [dbusMouse(0, dx, dy, 2, true)];
-                    } else if (action === 'up') {
-                        actionCmds = [dbusMouse(0, -1, -1, 0, true)];
-                        clearMouseHoldTimer();
-                        mouseHeldNode = null;
-                        mouseHoldStarted = 0;
                     } else if (action === 'wheel') {
-                        var w = Math.max(-5, Math.min(5, Math.round(Number(parsed.delta) || 0)));
+                        w = Math.max(-5, Math.min(5, Math.round(Number(parsed.delta) || 0)));
                         if (w === 0) w = -1;
-                        if (hasXY) actionCmds = buildJumpCmds(x, y);
-                        actionCmds.push(dbusMouse(3, w, -1, 2, true));
                     } else {
                         res.writeHead(400, { 'content-type': 'application/json' });
                         res.end(JSON.stringify({ ok: false, error: 'invalid mouse action' }));
                         return;
                     }
 
-                    var initCmd = dbusWm('init_device', 'uint32:0 string:' + node, true);
-                    var needInit = (mouseInitNode !== node);
-                    var runList = needInit ? [initCmd].concat(actionCmds) : actionCmds;
-                    touchMouseInit(node);
-                    function onOk(r) {
-                        if (!r || r.exit_code !== 0) {
-                            mouseInitNode = null;
-                        }
+                    var tail = mouseQueue.length > 0 ? mouseQueue[mouseQueue.length - 1] : null;
+                    if (action === 'drag' && tail && tail.action === 'drag' && tail.node === node) {
+                        tail.dx = Math.max(-2000, Math.min(2000, tail.dx + dx));
+                        tail.dy = Math.max(-2000, Math.min(2000, tail.dy + dy));
                         res.writeHead(200, { 'content-type': 'application/json' });
-                        res.end(JSON.stringify({ ok: !!(r && r.exit_code === 0), stderr: r && r.stderr }));
+                        res.end(JSON.stringify({ ok: true }));
+                        return;
                     }
-                    function onErr(e) {
-                        mouseInitNode = null;
-                        res.writeHead(200, { 'content-type': 'application/json' });
-                        res.end(JSON.stringify({ ok: false, error: e.message }));
+                    if (mouseBusy && mouseQueue.length >= MAX_MOUSE_QUEUE) {
+                        res.writeHead(503, { 'content-type': 'application/json' });
+                        res.end(JSON.stringify({ ok: false, error: 'mouse queue full' }));
+                        return;
                     }
-                    ctx.execute(runShell(runList), 5000).then(function (r) {
-                        if (!needInit && r && typeof r.stdout === 'string' && r.stdout.indexOf('Initialize device first') !== -1) {
-                            touchMouseInit(node);
-                            ctx.execute(runShell([initCmd].concat(actionCmds)), 5000).then(onOk, onErr);
-                            return;
-                        }
-                        onOk(r);
-                    }, onErr);
+                    mouseQueue.push({
+                        node: node,
+                        action: action,
+                        hasXY: hasXY,
+                        x: x,
+                        y: y,
+                        dx: dx,
+                        dy: dy,
+                        w: w,
+                        res: res
+                    });
+                    drainMouseQueue();
                 });
                 return true;
             }
@@ -1341,17 +1473,12 @@ module.exports = function (ctx) {
 
             // GET api/screenshot — captures crisp 1080p JPEG via Wayland (or Enlightenment WM PNG fallback)
             if (sub === 'screenshot' && req.method === 'GET') {
-                var rawUrl = req.url || '';
-                var qMatch = /[?&]quality=(\d+)/.exec(rawUrl);
-                var shotQual = qMatch ? Math.max(20, Math.min(95, parseInt(qMatch[1], 10) || 85)) : 85;
-                var isScaled = rawUrl.indexOf('scale=1') !== -1;
-                var shotKey = shotQual + ':' + (isScaled ? '1' : '0');
-                if (screenshotWaiters[shotKey]) {
-                    screenshotWaiters[shotKey].push(res);
+                if (screenshotWaiters) {
+                    screenshotWaiters.push(res);
                     return true;
                 }
-                screenshotWaiters[shotKey] = [res];
-                runScreenshotCapture(shotKey, shotQual, isScaled);
+                screenshotWaiters = [res];
+                runScreenshotCapture();
                 return true;
             }
 
