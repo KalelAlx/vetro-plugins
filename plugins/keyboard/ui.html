@@ -2557,6 +2557,7 @@ function wsJumpCursor(tx, ty) {
   curTvY = ty;
 }
 
+var MOUSE_HTTP_TIMEOUT_MS = 4000;
 var mouseHttpBusy = false;
 var mouseHttpQueue = [];
 var wheelTimer = null;
@@ -2594,14 +2595,43 @@ function drainMouseHttp() {
     item = { action: "drag", dx: step.sx, dy: step.sy };
   }
   mouseHttpBusy = true;
-  fetch("mouse", {
+  var finished = false;
+  var ctrl = (typeof AbortController === "function") ? new AbortController() : null;
+  var timer = setTimeout(function () {
+    if (ctrl) {
+      try { ctrl.abort(); } catch (e) {}
+    }
+    finish(true);
+  }, MOUSE_HTTP_TIMEOUT_MS);
+  function finish(timedOut) {
+    if (finished) return;
+    finished = true;
+    clearTimeout(timer);
+    if (timedOut && mouseHttpQueue.length > 0) {
+      var keepUp = false;
+      for (var i = 0; i < mouseHttpQueue.length; i++) {
+        if (mouseHttpQueue[i] && mouseHttpQueue[i].action === "up") keepUp = true;
+      }
+      mouseHttpQueue = keepUp ? [{ action: "up" }] : [];
+    }
+    mouseHttpBusy = false;
+    drainMouseHttp();
+  }
+  var opts = {
     method: "POST",
     headers: { "Content-Type": "text/plain" },
     body: JSON.stringify(item)
-  }).catch(function () {}).then(function () {
-    mouseHttpBusy = false;
-    drainMouseHttp();
-  });
+  };
+  if (ctrl) opts.signal = ctrl.signal;
+  try {
+    fetch("mouse", opts).then(function () {
+      finish(false);
+    }, function () {
+      finish(false);
+    });
+  } catch (e) {
+    finish(false);
+  }
 }
 
 function postMouseFallback(payload) {
