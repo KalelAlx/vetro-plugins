@@ -151,6 +151,16 @@ body {
   border-color: rgba(143, 186, 255, .4);
   color: var(--link);
 }
+.status-badge.is-retryable {
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: filter .12s, transform .05s;
+}
+.status-badge.is-retryable:hover { filter: brightness(1.15); }
+.status-badge.is-retryable:active { transform: scale(.97); }
+.status-badge.is-retryable:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 
 .btn-collapse {
   width: 28px;
@@ -738,6 +748,38 @@ button.danger:hover { background: rgba(248, 81, 73, .22); }
   height: 15px;
   accent-color: var(--action);
 }
+.preset-switch button {
+  padding: 2px 8px;
+  font-size: 11px;
+  height: 22px;
+}
+.quality-ctrl {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-family: monospace;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1px 7px;
+  height: 22px;
+  white-space: nowrap;
+}
+.quality-ctrl input[type="range"] {
+  width: 64px;
+  height: 14px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--action);
+}
+#lbl-stream-quality {
+  min-width: 18px;
+  text-align: right;
+  color: var(--text);
+  font-weight: 600;
+}
 #only-theater-actions {
   display: none;
   align-items: center;
@@ -947,10 +989,22 @@ body.is-screen-only #only-theater-actions {
           <span id="dpad-tools" style="display:none;align-items:center;gap:6px">
             <button type="button" id="btn-preview-back" class="btn-mini" title="Send Back to TV">↩ Back</button>
           </span>
-          <label class="auto-refresh-label">
+          <label class="auto-refresh-label" title="Continuous low-latency live TV display">
             <input type="checkbox" id="chk-auto-refresh">
-            <span>Auto-refresh</span>
+            <span>Live stream</span>
           </label>
+          <span id="stream-quality-controls" style="display:none;align-items:center;gap:6px;flex-wrap:wrap">
+            <div class="mode-switch preset-switch" role="group" aria-label="Live stream resolution preset">
+              <button type="button" id="btn-preset-fast" title="Fast (640×360, Q45, lowest bandwidth)">Fast</button>
+              <button type="button" id="btn-preset-balanced" class="active" title="Balanced (960×540, Q55, recommended)">Balanced</button>
+              <button type="button" id="btn-preset-hd" title="HD (1280×720, Q72, sharp detail)">HD</button>
+            </div>
+            <label class="quality-ctrl" title="Fine-tune live stream JPEG quality (20-95)">
+              <span>Q</span>
+              <input type="range" id="rng-stream-quality" min="20" max="95" step="5" value="55">
+              <span id="lbl-stream-quality">55</span>
+            </label>
+          </span>
           <span id="screen-time" style="font-size:var(--fs-xs);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px;display:inline-block;vertical-align:middle"></span>
         </div>
         <div class="screen-action-group">
@@ -1149,14 +1203,21 @@ var hostFromUrl = location.hostname || "";
 var isFallbackHost = !hostFromUrl || hostFromUrl === "127.0.0.1" || hostFromUrl === "localhost" || hostFromUrl === "::1" || hostFromUrl === "[::1]";
 var tvIp = hostFromUrl || "127.0.0.1";
 var tvToken = null;
+var tvDeviceTag = null;
+var tvTokenIsLegacy = false;
 var ws = null;
 var wsConnected = false;
 var wsConnecting = false;
 var wsMouseReady = false;
 var activePort = 8002;
 var activeHoldKey = null;
-var authRetryCount = 0;
-var MAX_AUTH_RETRIES = 3;
+var authAttempts = 0;
+var MAX_AUTH_ATTEMPTS = 2;
+var authRetryTimer = null;
+var wsOpenedOnce = false;
+var statusCanRetry = false;
+var lastRetryStatus = null;
+var statusRestoreTimer = null;
 
 var isTouch = ("ontouchstart" in window) || (navigator.maxTouchPoints > 0);
 var isMobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
@@ -1210,39 +1271,100 @@ if (btnCopyCert) {
 
 if (btnReconnect) {
   btnReconnect.onclick = function () {
-    authRetryCount = 0;
-    setStatus("Connecting…", "busy");
-    if (ws) { try { ws.close(); } catch (e) {} }
-    wsConnected = false;
-    wsConnecting = false;
-    initWS();
+    retryPairing();
   };
 }
 
 if (btnRepair) {
   btnRepair.onclick = function () {
-    authRetryCount = 0;
+    if (authRetryTimer) {
+      clearTimeout(authRetryTimer);
+      authRetryTimer = null;
+    }
+    authAttempts = 0;
     tvToken = null;
+    tvTokenIsLegacy = false;
+    lastRetryStatus = null;
+    setStatus("Resetting pairing…", "busy");
     fetch("savetoken", {
       method: "POST",
       headers: { "Content-Type": "text/plain" },
       body: JSON.stringify({ reset: true })
     }).then(function () {
-      setStatus("Pairing reset. Reconnecting…", "busy");
-      if (ws) { try { ws.close(); } catch (e) {} }
-      wsConnected = false;
-      wsConnecting = false;
-      initWS();
+      retryPairing();
     }).catch(function () {
-      initWS();
+      retryPairing();
     });
   };
 }
 
-function setStatus(msg, cls) {
+function setStatus(msg, cls, canRetry) {
+  if (statusRestoreTimer) {
+    clearTimeout(statusRestoreTimer);
+    statusRestoreTimer = null;
+  }
+  statusCanRetry = !!canRetry;
   statusEl.textContent = msg;
-  statusEl.className = "status-badge" + (cls ? " " + cls : "");
-  statusEl.title = msg;
+  statusEl.className = "status-badge" + (cls ? " " + cls : "") + (statusCanRetry ? " is-retryable" : "");
+  if (statusCanRetry) {
+    lastRetryStatus = { msg: msg, cls: cls };
+    statusEl.setAttribute("role", "button");
+    statusEl.setAttribute("tabindex", "0");
+    statusEl.title = msg + " — Tap to retry pairing";
+  } else {
+    statusEl.removeAttribute("role");
+    statusEl.removeAttribute("tabindex");
+    statusEl.title = msg;
+    if (cls === "ok" && wsConnected) {
+      lastRetryStatus = null;
+    } else if (!wsConnected && !wsConnecting && lastRetryStatus) {
+      statusRestoreTimer = setTimeout(function () {
+        statusRestoreTimer = null;
+        if (!wsConnected && !wsConnecting && lastRetryStatus) {
+          setStatus(lastRetryStatus.msg, lastRetryStatus.cls, true);
+        }
+      }, 2500);
+    }
+  }
+}
+
+function retryPairing() {
+  if (authRetryTimer) {
+    clearTimeout(authRetryTimer);
+    authRetryTimer = null;
+  }
+  if (statusRestoreTimer) {
+    clearTimeout(statusRestoreTimer);
+    statusRestoreTimer = null;
+  }
+  authAttempts = 0;
+  var prevWs = ws;
+  ws = null;
+  if (prevWs) {
+    try { prevWs.close(); } catch (e) {}
+  }
+  wsConnected = false;
+  wsConnecting = false;
+  wsMouseReady = false;
+  initWS();
+}
+
+if (statusEl) {
+  statusEl.addEventListener("click", function (e) {
+    if (!statusCanRetry) return;
+    e.stopPropagation();
+    retryPairing();
+    try { statusEl.blur(); } catch (err) {}
+  });
+  statusEl.addEventListener("keydown", function (e) {
+    if (!statusCanRetry) return;
+    if (e.key === "Enter" || e.key === " " || e.keyCode === 13 || e.keyCode === 32) {
+      e.preventDefault();
+      e.stopPropagation();
+      retryPairing();
+      try { statusEl.blur(); } catch (err) {}
+    }
+  });
 }
 
 function utf8b64(str) {
@@ -1250,14 +1372,6 @@ function utf8b64(str) {
 }
 
 function getClientAppName() {
-  var stored = null;
-  try {
-    stored = localStorage.getItem("vetro_client_name");
-  } catch (e) {}
-  if (stored && typeof stored === "string" && stored.replace(/^\s+|\s+$/g, "").length > 0) {
-    return stored.replace(/^\s+|\s+$/g, "").slice(0, 30);
-  }
-
   var ua = (typeof navigator !== "undefined" && navigator.userAgent) || "";
   var dev = "Device";
   if (/Android/i.test(ua)) dev = "Android";
@@ -1267,6 +1381,10 @@ function getClientAppName() {
   else if (/Macintosh|Mac OS/i.test(ua)) dev = "Mac";
   else if (/CrOS/i.test(ua)) dev = "ChromeOS";
   else if (/Linux/i.test(ua)) dev = "Linux";
+
+  if (tvDeviceTag && /^[0-9a-f]{4}$/i.test(tvDeviceTag)) {
+    return ("Vetro (" + dev + " #" + tvDeviceTag.toLowerCase() + ")").slice(0, 30);
+  }
 
   var browser = "";
   if (/Edg\//i.test(ua)) browser = "Edge";
@@ -1382,9 +1500,15 @@ function sendKey(key, shift, ctrl) {
 }
 
 function initWS() {
-  if (wsConnected) return;
-  if (wsConnecting) return;
+  if (wsConnected || wsConnecting) return;
+  if (authRetryTimer) {
+    clearTimeout(authRetryTimer);
+    authRetryTimer = null;
+  }
   wsConnecting = true;
+  authAttempts++;
+  var attemptNum = authAttempts;
+  var authHandled = false;
   setStatus("Connecting to TV…", "busy");
 
   var port = 8002;
@@ -1402,31 +1526,53 @@ function initWS() {
     wsConnecting = false;
     wsConnected = false;
     certBanner.style.display = "block";
-    setStatus("Cert required", "warn");
+    setStatus("Cert required ↻", "warn", true);
     return;
   }
 
   var opened = false;
   var connTimer = setTimeout(function () {
-    if (!opened && wsConnecting && ws === currentWs) {
+    if (ws !== currentWs) return;
+    if (!opened && wsConnecting) {
       try { currentWs.close(); } catch (e) {}
       wsConnecting = false;
       certBanner.style.display = "block";
-      setStatus("Cert required", "warn");
+      setStatus("Cert required ↻", "warn", true);
     }
   }, 3500);
 
+  function handleAuthFailure(reason) {
+    if (authHandled) return;
+    authHandled = true;
+    clearTimeout(connTimer);
+    wsConnected = false;
+    wsConnecting = false;
+    wsMouseReady = false;
+    if (attemptNum < MAX_AUTH_ATTEMPTS) {
+      setStatus((reason === "denied" ? "Pairing denied" : "Pairing timeout") + " (" + attemptNum + "/" + MAX_AUTH_ATTEMPTS + ")", "warn", true);
+      authRetryTimer = setTimeout(function () {
+        authRetryTimer = null;
+        initWS();
+      }, 2000);
+    } else {
+      setStatus(reason === "denied" ? "Pairing denied ↻" : "Pairing timed out ↻", "err", true);
+    }
+  }
+
   currentWs.onopen = function () {
+    if (ws !== currentWs) return;
     opened = true;
+    wsOpenedOnce = true;
     clearTimeout(connTimer);
     if (!tvToken) {
-      setStatus("Select 'Allow' on TV", "warn");
+      setStatus("Select 'Allow' (" + attemptNum + "/" + MAX_AUTH_ATTEMPTS + ")", "warn");
     } else {
       setStatus("Authenticating…", "busy");
     }
   };
 
   currentWs.onmessage = function (e) {
+    if (ws !== currentWs) return;
     try {
       var msg = JSON.parse(e.data);
       if (msg.event === "ms.channel.connect") {
@@ -1434,7 +1580,8 @@ function initWS() {
         wsConnecting = false;
         wsMouseReady = false;
         activePort = 8002;
-        authRetryCount = 0;
+        authAttempts = 0;
+        lastRetryStatus = null;
         try {
           currentWs.send(JSON.stringify({
             method: "ms.remote.control",
@@ -1443,49 +1590,49 @@ function initWS() {
           wsMouseReady = true;
         } catch (mErr) {}
         var t = msg.data && msg.data.token ? String(msg.data.token) : null;
-        if (t && t !== tvToken) {
-          tvToken = t;
+        if ((t && t !== tvToken) || (tvTokenIsLegacy && (t || tvToken))) {
+          var saveTok = t || tvToken;
+          tvToken = saveTok;
+          tvTokenIsLegacy = false;
           fetch("savetoken", {
             method: "POST",
             headers: { "Content-Type": "text/plain" },
-            body: JSON.stringify({ token: t })
+            body: JSON.stringify({ token: saveTok })
           }).catch(function () {});
         }
         setStatus("Connected ✔ Ready", "ok");
         certBanner.style.display = "none";
       } else if (msg.event === "ms.channel.unauthorized") {
-        wsConnected = false;
-        wsConnecting = false;
-        wsMouseReady = false;
         tvToken = null;
+        tvTokenIsLegacy = false;
         fetch("savetoken", {
           method: "POST",
           headers: { "Content-Type": "text/plain" },
           body: JSON.stringify({ reset: true })
         }).catch(function () {});
-        authRetryCount++;
-        if (authRetryCount <= MAX_AUTH_RETRIES) {
-          setStatus("Pairing denied (" + authRetryCount + "/" + MAX_AUTH_RETRIES + ")", "warn");
-          setTimeout(function () { initWS(); }, 2000);
-        } else {
-          setStatus("Pairing denied", "err");
-        }
+        try { currentWs.close(); } catch (cErr) {}
+        handleAuthFailure("denied");
+      } else if (msg.event === "ms.channel.timeOut") {
+        try { currentWs.close(); } catch (tErr) {}
+        handleAuthFailure("timeout");
       }
     } catch (err) {}
   };
 
   currentWs.onerror = function () {
+    if (ws !== currentWs) return;
     clearTimeout(connTimer);
     wsConnected = false;
     wsConnecting = false;
     wsMouseReady = false;
     if (!opened) {
       certBanner.style.display = "block";
-      setStatus("Cert required", "warn");
+      setStatus("Cert required ↻", "warn", true);
     }
   };
 
   currentWs.onclose = function () {
+    if (ws !== currentWs) return;
     clearTimeout(connTimer);
     var wasConn = wsConnected;
     wsConnected = false;
@@ -1493,17 +1640,11 @@ function initWS() {
     wsMouseReady = false;
     if (!opened) {
       certBanner.style.display = "block";
-      setStatus("Cert required", "warn");
+      setStatus("Cert required ↻", "warn", true);
     } else if (!wasConn) {
-      authRetryCount++;
-      if (authRetryCount <= MAX_AUTH_RETRIES) {
-        setStatus("Pairing timeout (" + authRetryCount + "/" + MAX_AUTH_RETRIES + ")", "warn");
-        setTimeout(function () { initWS(); }, 2000);
-      } else {
-        setStatus("Pairing timed out", "err");
-      }
+      handleAuthFailure("timeout");
     } else {
-      setStatus("Disconnected", "warn");
+      setStatus("Disconnected ↻", "warn", true);
     }
   };
 }
@@ -1518,7 +1659,14 @@ Promise.all([
     tvIp = d.tvIp;
     updateCertUrl();
   }
+  if (d && d.stream) {
+    updateStreamConfigUI(d.stream);
+  }
   if (tokRes && tokRes.ok) {
+    tvDeviceTag = (typeof tokRes.deviceTag === "string" && /^[0-9a-f]{4}$/i.test(tokRes.deviceTag))
+      ? tokRes.deviceTag.toLowerCase()
+      : null;
+    tvTokenIsLegacy = !!tokRes.legacy;
     if (typeof tokRes.token === "string" && tokRes.token.length > 0) {
       tvToken = tokRes.token;
     } else {
@@ -1595,9 +1743,13 @@ function sendText(text, submit) {
       })
       .catch(function () { setStatus("Network error", "err"); });
   } else {
-    certBanner.style.display = "block";
-    setStatus("Unicode text input requires TV certificate approval (see banner above)", "warn");
-    initWS();
+    if (!wsOpenedOnce) {
+      certBanner.style.display = "block";
+      setStatus("Unicode requires TV permission (see banner)", "warn", true);
+    } else {
+      setStatus("Retrying TV connection…", "busy");
+    }
+    retryPairing();
   }
 }
 
@@ -1790,6 +1942,17 @@ function sendSubmit() {
     .catch(function () { setStatus("Network error", "err"); });
 }
 
+function isTextInputFocused() {
+  var el = document.activeElement;
+  if (!el) return false;
+  if (el.tagName === "TEXTAREA") return true;
+  if (el.tagName === "INPUT") {
+    var t = (el.type || "text").toLowerCase();
+    return !el.readOnly && (t === "text" || t === "search" || t === "url" || t === "tel" || t === "email" || t === "password" || t === "number");
+  }
+  return false;
+}
+
 document.addEventListener("keydown", function (e) {
   // Always handle Ctrl+Enter / Cmd+Enter as OK click everywhere
   if ((e.key === "Enter" || e.keyCode === 13) && (e.ctrlKey || e.metaKey)) {
@@ -1801,7 +1964,7 @@ document.addEventListener("keydown", function (e) {
   }
 
   // If focus is inside an input or textarea, let native input handling proceed
-  if (document.activeElement && (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA")) {
+  if (isTextInputFocused()) {
     return;
   }
 
@@ -1926,7 +2089,7 @@ document.addEventListener("keydown", function (e) {
 });
 
 document.addEventListener("paste", function (e) {
-  if (document.activeElement && (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA")) {
+  if (isTextInputFocused()) {
     return;
   }
   var clip = e.clipboardData || window.clipboardData;
@@ -1942,7 +2105,7 @@ document.addEventListener("paste", function (e) {
 });
 
 document.addEventListener("keyup", function (e) {
-  if (document.activeElement && (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA")) {
+  if (isTextInputFocused()) {
     return;
   }
   if (e.key === "Backspace" && activeHoldKey === "BackSpace") {
@@ -2047,9 +2210,6 @@ function toggleKeyboardCollapse(e) {
   if (e && e.target && (e.target.closest("#status") || e.target.closest("a") || e.target.closest("input"))) return;
   var collapsed = boxKeyboard.classList.toggle("is-collapsed");
   btnToggleKeyboard.setAttribute("aria-expanded", collapsed ? "false" : "true");
-  try {
-    localStorage.setItem("vetro_keyboard_collapsed", collapsed ? "1" : "0");
-  } catch (err) {}
 }
 
 if (btnToggleKeyboard && boxKeyboard) {
@@ -2060,12 +2220,6 @@ if (btnToggleKeyboard && boxKeyboard) {
   if (keyboardHeader) {
     keyboardHeader.addEventListener("click", toggleKeyboardCollapse);
   }
-  try {
-    if (localStorage.getItem("vetro_keyboard_collapsed") === "1") {
-      boxKeyboard.classList.add("is-collapsed");
-      btnToggleKeyboard.setAttribute("aria-expanded", "false");
-    }
-  } catch (err) {}
 }
 
 var boxPlayback = document.getElementById("box-playback");
@@ -2076,9 +2230,6 @@ function togglePlaybackCollapse(e) {
   if (e && e.target && (e.target.closest("a") || e.target.closest("button:not(.btn-collapse)"))) return;
   var collapsed = boxPlayback.classList.toggle("is-collapsed");
   btnTogglePlayback.setAttribute("aria-expanded", collapsed ? "false" : "true");
-  try {
-    localStorage.setItem("vetro_playback_collapsed", collapsed ? "1" : "0");
-  } catch (err) {}
 }
 
 if (btnTogglePlayback && boxPlayback) {
@@ -2089,12 +2240,6 @@ if (btnTogglePlayback && boxPlayback) {
   if (playbackHeader) {
     playbackHeader.addEventListener("click", togglePlaybackCollapse);
   }
-  try {
-    if (localStorage.getItem("vetro_playback_collapsed") === "1") {
-      boxPlayback.classList.add("is-collapsed");
-      btnTogglePlayback.setAttribute("aria-expanded", "false");
-    }
-  } catch (err) {}
 }
 
 // Screen preview, interactive pointer / D-Pad, standalone tab & fullscreen orientation logic
@@ -2110,6 +2255,12 @@ var screenTime = document.getElementById("screen-time");
 var screenHint = document.getElementById("screen-hint");
 var btnRefreshScreen = document.getElementById("btn-refresh-screen");
 var chkAutoRefresh = document.getElementById("chk-auto-refresh");
+var streamQualityControls = document.getElementById("stream-quality-controls");
+var btnPresetFast = document.getElementById("btn-preset-fast");
+var btnPresetBalanced = document.getElementById("btn-preset-balanced");
+var btnPresetHd = document.getElementById("btn-preset-hd");
+var rngStreamQuality = document.getElementById("rng-stream-quality");
+var lblStreamQuality = document.getElementById("lbl-stream-quality");
 
 var linkStandalone = document.getElementById("link-standalone");
 var standaloneBanner = document.getElementById("standalone-banner");
@@ -2123,6 +2274,7 @@ var btnRotateScreen = document.getElementById("btn-rotate-screen");
 var btnNativeFs = document.getElementById("btn-native-fs");
 var btnTheaterInput = document.getElementById("btn-theater-input");
 var theaterInputActive = false;
+var theaterInputSet = false;
 
 var btnModePointer = document.getElementById("btn-mode-pointer");
 var btnModeDpad = document.getElementById("btn-mode-dpad");
@@ -2214,9 +2366,9 @@ function setRotatedLandscape(on) {
 
 function setTheaterInput(on) {
   theaterInputActive = !!on;
+  theaterInputSet = true;
   document.body.classList.toggle("has-theater-input", theaterInputActive);
   if (btnTheaterInput) btnTheaterInput.classList.toggle("active", theaterInputActive);
-  try { localStorage.setItem("vetro_theater_input", theaterInputActive ? "1" : "0"); } catch (e) {}
   setTimeout(fitScreenFrame, 30);
 }
 
@@ -2232,13 +2384,7 @@ function setScreenOnlyMode(on, syncHash) {
     if (!hasScreenImage && !screenCapturing) {
       fetchScreenshot();
     }
-    var savedInput = null;
-    try { savedInput = localStorage.getItem("vetro_theater_input"); } catch (e) {}
-    if (savedInput !== null) {
-      setTheaterInput(savedInput === "1");
-    } else {
-      setTheaterInput(!!isMobile);
-    }
+    setTheaterInput(theaterInputSet ? theaterInputActive : !!isMobile);
   } else {
     document.body.classList.remove("has-theater-input");
     if (btnTheaterInput) btnTheaterInput.classList.remove("active");
@@ -2493,6 +2639,7 @@ function wsJumpCursor(tx, ty) {
   curTvY = ty;
 }
 
+var MOUSE_HTTP_TIMEOUT_MS = 4000;
 var mouseHttpBusy = false;
 var mouseHttpQueue = [];
 var wheelTimer = null;
@@ -2530,14 +2677,43 @@ function drainMouseHttp() {
     item = { action: "drag", dx: step.sx, dy: step.sy };
   }
   mouseHttpBusy = true;
-  fetch("mouse", {
+  var finished = false;
+  var ctrl = (typeof AbortController === "function") ? new AbortController() : null;
+  var timer = setTimeout(function () {
+    if (ctrl) {
+      try { ctrl.abort(); } catch (e) {}
+    }
+    finish(true);
+  }, MOUSE_HTTP_TIMEOUT_MS);
+  function finish(timedOut) {
+    if (finished) return;
+    finished = true;
+    clearTimeout(timer);
+    if (timedOut && mouseHttpQueue.length > 0) {
+      var keepUp = false;
+      for (var i = 0; i < mouseHttpQueue.length; i++) {
+        if (mouseHttpQueue[i] && mouseHttpQueue[i].action === "up") keepUp = true;
+      }
+      mouseHttpQueue = keepUp ? [{ action: "up" }] : [];
+    }
+    mouseHttpBusy = false;
+    drainMouseHttp();
+  }
+  var opts = {
     method: "POST",
     headers: { "Content-Type": "text/plain" },
     body: JSON.stringify(item)
-  }).catch(function () {}).then(function () {
-    mouseHttpBusy = false;
-    drainMouseHttp();
-  });
+  };
+  if (ctrl) opts.signal = ctrl.signal;
+  try {
+    fetch("mouse", opts).then(function () {
+      finish(false);
+    }, function () {
+      finish(false);
+    });
+  } catch (e) {
+    finish(false);
+  }
 }
 
 function postMouseFallback(payload) {
@@ -2674,15 +2850,8 @@ function setPreviewMode(mode) {
       ? "D-Pad mode (YouTube & TV apps): Swipe to move focus · Tap edges (▲▼◀▶) or center (OK) · Right-click: Back"
       : "Tap: click · Double-tap: double-click · Hold or drag: press & drag · Right-click or Shift+Wheel supported";
   }
-  try { localStorage.setItem("vetro_preview_mode", previewMode); } catch (e) {}
   if (isScreenOnly) fitScreenFrame();
 }
-
-try {
-  if (localStorage.getItem("vetro_preview_mode") === "dpad") {
-    setPreviewMode("dpad");
-  }
-} catch (e) {}
 
 if (btnModePointer) {
   btnModePointer.onclick = function () { setPreviewMode("pointer"); };
@@ -2942,14 +3111,214 @@ if (screenFrame) {
   });
 }
 
+var streamFailCount = 0;
+var streamFallbackPolling = false;
+var currentStreamPreset = "balanced";
+var currentStreamWidth = 960;
+var currentStreamHeight = 540;
+var currentStreamQuality = 55;
+var STREAM_PRESET_DEFAULTS = {
+  fast: { width: 640, height: 360, quality: 45 },
+  balanced: { width: 960, height: 540, quality: 55 },
+  hd: { width: 1280, height: 720, quality: 72 }
+};
+
+function updateStreamQualityVisibility() {
+  if (!streamQualityControls) return;
+  streamQualityControls.style.display = (chkAutoRefresh && chkAutoRefresh.checked) ? "inline-flex" : "none";
+  if (isScreenOnly) fitScreenFrame();
+}
+
+function updatePresetButtons(mode) {
+  currentStreamPreset = mode;
+  if (btnPresetFast) btnPresetFast.classList.toggle("active", mode === "fast");
+  if (btnPresetBalanced) btnPresetBalanced.classList.toggle("active", mode === "balanced");
+  if (btnPresetHd) btnPresetHd.classList.toggle("active", mode === "hd");
+}
+
+function updateStreamConfigUI(cfg) {
+  if (!cfg || typeof cfg !== "object") return;
+  if (cfg.preset || cfg.mode) {
+    var m = cfg.preset || cfg.mode;
+    if (STREAM_PRESET_DEFAULTS[m]) {
+      updatePresetButtons(m);
+      currentStreamWidth = cfg.width || STREAM_PRESET_DEFAULTS[m].width;
+      currentStreamHeight = cfg.height || STREAM_PRESET_DEFAULTS[m].height;
+    }
+  }
+  if (typeof cfg.width === "number" && isFinite(cfg.width)) currentStreamWidth = cfg.width;
+  if (typeof cfg.height === "number" && isFinite(cfg.height)) currentStreamHeight = cfg.height;
+  if (cfg.quality !== undefined && cfg.quality !== null && isFinite(Number(cfg.quality))) {
+    currentStreamQuality = Math.max(20, Math.min(95, Math.round(Number(cfg.quality))));
+    if (rngStreamQuality) rngStreamQuality.value = String(currentStreamQuality);
+    if (lblStreamQuality) lblStreamQuality.textContent = String(currentStreamQuality);
+  }
+}
+
+function postStreamConfig(payload) {
+  fetch("stream_preset", {
+    method: "POST",
+    headers: { "Content-Type": "text/plain" },
+    body: JSON.stringify(payload)
+  }).then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d && d.ok) {
+        updateStreamConfigUI(d);
+        if (chkAutoRefresh && chkAutoRefresh.checked && !streamFallbackPolling) {
+          screenTime.textContent = "🔴 Live stream · " + currentStreamWidth + "×" + currentStreamHeight + " · Q" + currentStreamQuality;
+        }
+      }
+    })
+    .catch(function () {});
+}
+
+function setStreamPreset(mode) {
+  var p = STREAM_PRESET_DEFAULTS[mode];
+  if (!p) return;
+  updateStreamConfigUI({ preset: mode, width: p.width, height: p.height, quality: p.quality });
+  if (chkAutoRefresh && chkAutoRefresh.checked && !streamFallbackPolling) {
+    screenTime.textContent = "🔴 Switching to " + p.width + "×" + p.height + "…";
+  }
+  postStreamConfig({ preset: mode });
+}
+
+function setStreamQuality(q) {
+  var val = Math.max(20, Math.min(95, Math.round(Number(q) || 55)));
+  currentStreamQuality = val;
+  if (lblStreamQuality) lblStreamQuality.textContent = String(val);
+  postStreamConfig({ quality: val });
+}
+
+if (btnPresetFast) {
+  btnPresetFast.addEventListener("click", function () {
+    setStreamPreset("fast");
+    btnPresetFast.blur();
+  });
+}
+if (btnPresetBalanced) {
+  btnPresetBalanced.addEventListener("click", function () {
+    setStreamPreset("balanced");
+    btnPresetBalanced.blur();
+  });
+}
+if (btnPresetHd) {
+  btnPresetHd.addEventListener("click", function () {
+    setStreamPreset("hd");
+    btnPresetHd.blur();
+  });
+}
+if (rngStreamQuality) {
+  rngStreamQuality.addEventListener("input", function () {
+    if (lblStreamQuality) lblStreamQuality.textContent = rngStreamQuality.value;
+  });
+  rngStreamQuality.addEventListener("change", function () {
+    setStreamQuality(rngStreamQuality.value);
+    rngStreamQuality.blur();
+  });
+}
+
+function startLiveStream() {
+  if (autoRefreshTimer) {
+    clearTimeout(autoRefreshTimer);
+    autoRefreshTimer = null;
+  }
+  screenCapturing = false;
+  streamFallbackPolling = false;
+  btnRefreshScreen.disabled = false;
+  btnRefreshScreen.textContent = "🔄 Reconnect";
+  screenTime.textContent = "🔴 Connecting live stream…";
+  screenImg.style.display = "block";
+  screenSpinner.style.display = "none";
+  if (screenFrame) screenFrame.classList.add("has-image");
+  hasScreenImage = true;
+
+  screenImg.onload = function () {
+    streamFailCount = 0;
+    var dim = (screenImg.naturalWidth && screenImg.naturalHeight)
+      ? (screenImg.naturalWidth + "×" + screenImg.naturalHeight)
+      : (currentStreamWidth + "×" + currentStreamHeight);
+    screenTime.textContent = "🔴 Live stream · " + dim + " · Q" + currentStreamQuality;
+    if (isScreenOnly) fitScreenFrame();
+  };
+  screenImg.onerror = function () {
+    if (!chkAutoRefresh || !chkAutoRefresh.checked) return;
+    if (document.hidden) return;
+    if (boxScreen.classList.contains("is-collapsed") && !isScreenOnly) return;
+    streamFailCount++;
+    if (streamFailCount < 2) {
+      screenTime.textContent = "Reconnecting live stream…";
+      autoRefreshTimer = setTimeout(startLiveStream, 1500);
+    } else {
+      streamFallbackPolling = true;
+      screenImg.onerror = null;
+      screenImg.onload = null;
+      screenTime.textContent = "Live fallback (polling)";
+      fetchScreenshot();
+    }
+  };
+  screenImg.src = "stream?t=" + Date.now();
+  if (isScreenOnly) fitScreenFrame();
+}
+
+function stopLiveStream(keepSnapshot) {
+  if (autoRefreshTimer) {
+    clearTimeout(autoRefreshTimer);
+    autoRefreshTimer = null;
+  }
+  streamFailCount = 0;
+  streamFallbackPolling = false;
+  btnRefreshScreen.disabled = false;
+  btnRefreshScreen.textContent = "🔄 Capture / Refresh";
+  screenImg.onerror = null;
+  screenImg.onload = null;
+  if (keepSnapshot && hasScreenImage) {
+    screenImg.src = "screenshot?t=" + Date.now();
+    screenTime.textContent = "Stream paused";
+  } else {
+    hasScreenImage = false;
+    screenImg.src = "";
+    screenImg.style.display = "none";
+    if (screenFrame) screenFrame.classList.remove("has-image");
+    if (!keepSnapshot) screenTime.textContent = "";
+  }
+}
+
+document.addEventListener("visibilitychange", function () {
+  if (!chkAutoRefresh || !chkAutoRefresh.checked) return;
+  if (document.hidden) {
+    if (autoRefreshTimer) {
+      clearTimeout(autoRefreshTimer);
+      autoRefreshTimer = null;
+    }
+    screenImg.onerror = null;
+    screenImg.onload = null;
+    screenImg.src = "";
+    screenTime.textContent = "Stream paused (tab hidden)";
+  } else if (!boxScreen.classList.contains("is-collapsed") || isScreenOnly) {
+    startLiveStream();
+  }
+});
+
+window.addEventListener("pagehide", function () {
+  if (chkAutoRefresh && chkAutoRefresh.checked) {
+    screenImg.onerror = null;
+    screenImg.onload = null;
+    screenImg.src = "";
+  }
+});
+
 function fetchScreenshot() {
+  if (chkAutoRefresh && chkAutoRefresh.checked && !streamFallbackPolling) {
+    startLiveStream();
+    return;
+  }
   if (screenCapturing) return;
   screenCapturing = true;
   if (!hasScreenImage) {
-    screenSpinner.textContent = "Capturing screen from TV…";
+    screenSpinner.textContent = "Capturing 1080p screen from TV…";
     screenSpinner.style.display = "block";
   } else {
-    screenTime.textContent = "Updating preview…";
+    screenTime.textContent = streamFallbackPolling ? "Live fallback (polling)" : "Capturing 1080p…";
   }
   btnRefreshScreen.disabled = true;
   btnRefreshScreen.textContent = "⏳ Capturing…";
@@ -2957,21 +3326,27 @@ function fetchScreenshot() {
   var img = new Image();
   var url = "screenshot?t=" + Date.now();
   img.onload = function () {
+    streamFailCount = 0;
     hasScreenImage = true;
+    screenImg.onerror = null;
+    screenImg.onload = null;
     screenImg.src = url;
     screenImg.style.display = "block";
     if (screenFrame) screenFrame.classList.add("has-image");
     screenSpinner.style.display = "none";
     screenCapturing = false;
     btnRefreshScreen.disabled = false;
-    btnRefreshScreen.textContent = "🔄 Capture / Refresh";
+    btnRefreshScreen.textContent = (chkAutoRefresh && chkAutoRefresh.checked) ? "🔄 Reconnect" : "🔄 Capture / Refresh";
     var d = new Date();
     var pad = function (n) { return (n < 10 ? "0" : "") + n; };
-    screenTime.textContent = "Captured at " + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+    var resLabel = (img.naturalWidth && img.naturalHeight) ? (img.naturalWidth + "×" + img.naturalHeight + " ") : "";
+    screenTime.textContent = streamFallbackPolling
+      ? ("Live fallback · " + resLabel + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds()))
+      : ("Captured " + resLabel + "at " + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds()));
     if (isScreenOnly) fitScreenFrame();
 
-    if (chkAutoRefresh && chkAutoRefresh.checked && (!boxScreen.classList.contains("is-collapsed") || isScreenOnly)) {
-      autoRefreshTimer = setTimeout(fetchScreenshot, 3500);
+    if (chkAutoRefresh && chkAutoRefresh.checked && streamFallbackPolling && (!boxScreen.classList.contains("is-collapsed") || isScreenOnly) && !document.hidden) {
+      autoRefreshTimer = setTimeout(fetchScreenshot, 2500);
     }
   };
   img.onerror = function () {
@@ -2982,10 +3357,10 @@ function fetchScreenshot() {
     }
     screenCapturing = false;
     btnRefreshScreen.disabled = false;
-    btnRefreshScreen.textContent = "🔄 Capture / Refresh";
+    btnRefreshScreen.textContent = (chkAutoRefresh && chkAutoRefresh.checked) ? "🔄 Reconnect" : "🔄 Capture / Refresh";
 
-    if (chkAutoRefresh && chkAutoRefresh.checked && (!boxScreen.classList.contains("is-collapsed") || isScreenOnly)) {
-      autoRefreshTimer = setTimeout(fetchScreenshot, 5000);
+    if (chkAutoRefresh && chkAutoRefresh.checked && streamFallbackPolling && (!boxScreen.classList.contains("is-collapsed") || isScreenOnly) && !document.hidden) {
+      autoRefreshTimer = setTimeout(fetchScreenshot, 4000);
     }
   };
   img.src = url;
@@ -2996,14 +3371,16 @@ function toggleScreenCollapse(e) {
   var collapsed = boxScreen.classList.toggle("is-collapsed");
   btnToggleScreen.setAttribute("aria-expanded", collapsed ? "false" : "true");
   if (collapsed) {
-    if (autoRefreshTimer) {
+    if (chkAutoRefresh && chkAutoRefresh.checked) {
+      stopLiveStream(false);
+    } else if (autoRefreshTimer) {
       clearTimeout(autoRefreshTimer);
       autoRefreshTimer = null;
     }
   } else {
-    if (!hasScreenImage) {
-      fetchScreenshot();
-    } else if (chkAutoRefresh && chkAutoRefresh.checked && !screenCapturing) {
+    if (chkAutoRefresh && chkAutoRefresh.checked) {
+      startLiveStream();
+    } else if (!hasScreenImage) {
       fetchScreenshot();
     }
   }
@@ -3023,18 +3400,32 @@ if (btnToggleScreen && boxScreen) {
   }
 }
 
-if (chkAutoRefresh) {
-  chkAutoRefresh.onchange = function () {
-    if (chkAutoRefresh.checked) {
-      if (!screenCapturing) fetchScreenshot();
-    } else {
-      if (autoRefreshTimer) clearTimeout(autoRefreshTimer);
-    }
+if (chkHoverOnly) {
+  chkHoverOnly.onchange = function () {
+    chkHoverOnly.blur();
   };
 }
 
+if (chkAutoRefresh) {
+  chkAutoRefresh.onchange = function () {
+    updateStreamQualityVisibility();
+    if (chkAutoRefresh.checked) {
+      startLiveStream();
+    } else {
+      stopLiveStream(true);
+    }
+    chkAutoRefresh.blur();
+  };
+}
+updateStreamQualityVisibility();
+
 btnRefreshScreen.onclick = function () {
-  fetchScreenshot();
+  if (chkAutoRefresh && chkAutoRefresh.checked) {
+    streamFailCount = 0;
+    startLiveStream();
+  } else {
+    fetchScreenshot();
+  }
 };
 
 if (!isTouch) {
