@@ -19,7 +19,7 @@ var sonos = require('./sonos.js');
 var discovery = require('./discovery.js');
 var vetroCheck = require('./vetro-check.js');
 
-var VERSION = '0.2.4';
+var VERSION = '0.2.5';
 var ACTIONS = ['volume-up', 'volume-down', 'mute-toggle', 'mute', 'unmute'];
 var DEFAULTS = {
     speaker: null,            // { uuid, name, address } of the room the remote controls
@@ -47,7 +47,8 @@ function isInt(v, min, max) {
 }
 
 // Merges an update into the previous settings. Throws an Error whose message is shown to the user.
-function validateSettings(input, previous) {
+// testHosts: see sonos.parseAddress (tests only).
+function validateSettings(input, previous, testHosts) {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Settings must be an object');
     var out = {};
     Object.keys(DEFAULTS).forEach(function (k) { out[k] = previous[k]; });
@@ -58,9 +59,11 @@ function validateSettings(input, previous) {
         if (s === null) out.speaker = null;
         else {
             if (!s || typeof s !== 'object') throw new Error('Choose a speaker');
-            var address = sonos.formatAddress(sonos.parseAddress(s.address));
+            // Only a home-network address (sonos.parseAddress says why not, for the page).
+            var address = sonos.formatAddress(sonos.parseAddress(s.address, testHosts));
             if (s.uuid != null && (typeof s.uuid !== 'string' || !UUID_RE.test(s.uuid))) throw new Error('Invalid speaker id');
-            if (s.name != null && (typeof s.name !== 'string' || s.name.length > 64)) throw new Error('Invalid speaker name');
+            if (s.name != null && (typeof s.name !== 'string' || s.name.length > sonos.MAX_NAME)) throw new Error('Invalid speaker name');
+            // No name: show the address (an IPv4 address, so always shorter than a room name can be).
             out.speaker = { uuid: s.uuid || null, name: s.name || address, address: address };
         }
     }
@@ -103,14 +106,22 @@ function validateSettings(input, previous) {
 }
 
 // What is saved may be from an older version or edited by hand: keep what is valid, default the rest.
-function normalize(stored) {
-    var out = validateSettings({}, DEFAULTS);
+// onDropped(key, error), if given, hears about each saved value that was not valid. A speaker saved by
+// an older version with an address outside the home network is dropped this way (see sonos.js).
+function normalize(stored, testHosts, onDropped) {
+    var out = validateSettings({}, DEFAULTS, testHosts);
     if (!stored || typeof stored !== 'object') return out;
     Object.keys(DEFAULTS).forEach(function (k) {
         if (!Object.prototype.hasOwnProperty.call(stored, k)) return;
         var one = {};
         one[k] = stored[k];
-        try { out = validateSettings(one, out); } catch (e) { /* keep the default */ }
+        // Versions up to 0.2.4 could save a room name longer than the settings check allows (a Sonos room
+        // renamed to a long name): shorten it, as the room list now does, instead of losing the speaker.
+        var sp = stored[k];
+        if (k === 'speaker' && sp && typeof sp === 'object' && typeof sp.name === 'string' && sp.name.length > sonos.MAX_NAME) {
+            one.speaker = { uuid: sp.uuid, name: sonos.shortName(sp.name), address: sp.address };
+        }
+        try { out = validateSettings(one, out, testHosts); } catch (e) { if (onDropped) onDropped(k, e); }
     });
     return out;
 }
@@ -130,13 +141,16 @@ function unique(list) {
     return out;
 }
 
-module.exports = function (ctx) {
-    var cfg = normalize(null);
+// testHosts: null when Vetro runs the Shard (see module.exports below). Tests pass ['127.0.0.1'], where
+// their simulated speakers listen; nothing else can set it.
+function createShard(ctx, testHosts) {
+    var cfg = normalize(null, testHosts);
     var running = false, receiver = null, search = null;
     var queue = [], busy = false;
     var topo = null;                       // { at, data } from the last GetZoneGroupState
     var log = [];
-    var state = { volume: null, muted: null, readAt: null, lastCommand: null, lastError: null, commands: 0 };
+    var state = { volume: null, muted: null, readAt: null, lastCommand: null, lastError: null, addressRefused: false, commands: 0 };
+    var speakerProblem = null;             // why the saved speaker was not loaded, until one is chosen
     var remote = { presses: 0, lastAt: null, lastTopic: null, ignored: 0, lastIgnored: null };
     var lastCheck = null, checking = null;
 
@@ -207,21 +221,24 @@ module.exports = function (ctx) {
         function next() {
             if (i >= addresses.length) return Promise.resolve(null);
             var text = addresses[i++], address;
-            try { address = sonos.parseAddress(text); } catch (e) { return next(); }
-            return sonos.getTopology(address, LOOKUP_TIMEOUT_MS).then(function (data) {
+            try { address = sonos.parseAddress(text, testHosts); } catch (e) { return next(); }
+            return sonos.getTopology(address, LOOKUP_TIMEOUT_MS, testHosts).then(function (data) {
                 return { at: Date.now(), data: data, from: text };
             }, function () { return next(); });
         }
         return next();
     }
 
+    // -> { addresses: ['host[:port]'], rejected: [{ address, why, error }] }. Answers from addresses outside
+    // the home network are never asked anything; they are logged and returned for the page.
     function discoverAddresses() {
         if (search) search.cancel();
-        var mine = discovery.search(SEARCH_WINDOW_MS);
+        var mine = discovery.search(SEARCH_WINDOW_MS, testHosts);
         search = mine;
-        return mine.promise.then(function (found) {
+        return mine.promise.then(function (result) {
             if (search === mine) search = null;
-            return found.map(sonos.formatAddress);
+            result.rejected.forEach(function (r) { note('warn', 'Search: not using the answer from ' + r.error); });
+            return { addresses: result.found.map(sonos.formatAddress), rejected: result.rejected };
         });
     }
 
@@ -235,8 +252,8 @@ module.exports = function (ctx) {
         var order = force ? unique(known.filter(function (a) { return a !== own; }).concat([own])) : unique([own].concat(known));
         return firstTopology(order).then(function (found) {
             if (found || !force) return found;
-            return discoverAddresses().then(function (list) {
-                return firstTopology(list.filter(function (a) { return order.indexOf(a) < 0; }));
+            return discoverAddresses().then(function (result) {
+                return firstTopology(result.addresses.filter(function (a) { return order.indexOf(a) < 0; }));
             });
         }).then(function (found) {
             if (!found) throw new Error('No Sonos speaker answered');
@@ -250,12 +267,26 @@ module.exports = function (ctx) {
         return null;
     }
 
+    // A room the topology lists at an address outside the home network (see sonos.parseTopology): the
+    // error says so, instead of "not in the Sonos system" or quietly using another player.
+    function refusedRoom(data, uuid, what) {
+        for (var i = 0; i < data.rejected.length; i++) {
+            var r = data.rejected[i];
+            if (r.uuid === uuid) {
+                var e = new Error(what + ' ' + r.name + ' moved to an address the Shard does not use: ' + r.error);
+                e.badAddress = true;
+                return e;
+            }
+        }
+        return null;
+    }
+
     // -> { address, mode, name }: where to send the next command.
     function resolveTarget(force) {
         if (!cfg.speaker) return Promise.reject(new Error('Choose a speaker in the Sonos tab first'));
         var speaker = cfg.speaker;
         if (!force && cfg.target === 'room') {
-            return Promise.resolve({ address: sonos.parseAddress(speaker.address), mode: 'room', name: speaker.name });
+            return Promise.resolve({ address: sonos.parseAddress(speaker.address, testHosts), mode: 'room', name: speaker.name });
         }
         if (!speaker.uuid) {
             if (force) return Promise.reject(new Error('The speaker at ' + speaker.address + ' does not answer'));
@@ -263,17 +294,22 @@ module.exports = function (ctx) {
         }
         return topology(force).then(function (data) {
             var room = findRoom(data, speaker.uuid);
-            if (!room) throw new Error('The room ' + speaker.name + ' is not in the Sonos system any more');
+            if (!room) throw refusedRoom(data, speaker.uuid, 'The room') || new Error('The room ' + speaker.name + ' is not in the Sonos system any more');
             if (room.address !== speaker.address || room.name !== speaker.name) {
                 note('info', room.name + ' is now at ' + room.address);
                 cfg.speaker = { uuid: room.uuid, name: room.name, address: room.address };
                 save();
             }
             if (cfg.target === 'group') {
-                var coordinator = findRoom(data, room.coordinator) || room;
-                return { address: sonos.parseAddress(coordinator.address), mode: 'group', name: room.name };
+                var coordinator = findRoom(data, room.coordinator);
+                if (!coordinator) {
+                    var refused = refusedRoom(data, room.coordinator, 'The group\u2019s main speaker');
+                    if (refused) throw refused;
+                    coordinator = room;
+                }
+                return { address: sonos.parseAddress(coordinator.address, testHosts), mode: 'group', name: room.name };
             }
-            return { address: sonos.parseAddress(room.address), mode: 'room', name: room.name };
+            return { address: sonos.parseAddress(room.address, testHosts), mode: 'room', name: room.name };
         });
     }
 
@@ -336,6 +372,13 @@ module.exports = function (ctx) {
         if (result && typeof result.muted === 'boolean') state.muted = result.muted;
         state.readAt = Date.now();
         state.lastError = null;
+        state.addressRefused = false;
+    }
+
+    function failed(e) {
+        state.lastError = String(e && e.message || e);
+        state.addressRefused = !!(e && e.badAddress);
+        return state.lastError;
     }
 
     function snapshot(ok, error) {
@@ -382,8 +425,7 @@ module.exports = function (ctx) {
             note('info', label + ' from ' + batch[0].source + ': volume ' + state.volume + (state.muted ? ', muted' : ''));
             return snapshot(true);
         }, function (e) {
-            var message = String(e && e.message || e);
-            state.lastError = message;
+            var message = failed(e);
             state.lastCommand = { action: label, source: batch[0].source, ok: false, at: Date.now(), error: message };
             note('error', label + ' failed: ' + message);
             return snapshot(false, message);
@@ -441,8 +483,10 @@ module.exports = function (ctx) {
             receiver: receiver ? receiver.status() : null,
             speaker: {
                 volume: state.volume, muted: state.muted, readAt: state.readAt,
-                lastCommand: state.lastCommand, lastError: state.lastError, commands: state.commands
+                lastCommand: state.lastCommand, lastError: state.lastError, addressRefused: state.addressRefused,
+                commands: state.commands
             },
+            speakerProblem: speakerProblem,
             topics: ACTIONS.map(function (a) { return { action: a, topic: cfg.topicPrefix + '/' + a }; }),
             remote: remote,
             check: lastCheck,
@@ -458,6 +502,11 @@ module.exports = function (ctx) {
             data.rooms.forEach(function (o) { if (o.groupId === r.groupId && o.uuid !== r.uuid) group.push(o.name); });
             return { uuid: r.uuid, name: r.name, address: r.address, groupedWith: group };
         });
+    }
+
+    // Rooms left out because of their address, for the page: [{ name, address, why }].
+    function skippedFrom(data) {
+        return data.rejected.map(function (r) { return { name: r.name, address: r.address, why: r.why }; });
     }
 
     // Reads Vetro's settings (see vetro-check.js). One at a time; the result stays on the page.
@@ -501,8 +550,9 @@ module.exports = function (ctx) {
 
     function applySettings(update) {
         var before = cfg, next;
-        try { next = validateSettings(update, cfg); } catch (e) { throw bad(e.message); }
+        try { next = validateSettings(update, cfg, testHosts); } catch (e) { throw bad(e.message); }
         cfg = next;
+        if (next.speaker) speakerProblem = null;
         save();
         if (before.brokerPort !== next.brokerPort || before.username !== next.username || before.password !== next.password) {
             note('info', 'Receiver settings changed: restarting it');
@@ -510,7 +560,7 @@ module.exports = function (ctx) {
         }
         var a = before.speaker, b = next.speaker;
         if (!a || !b || a.uuid !== b.uuid || a.address !== b.address || before.target !== next.target) {
-            state.volume = null; state.muted = null; state.readAt = null; state.lastError = null;
+            state.volume = null; state.muted = null; state.readAt = null; state.lastError = null; state.addressRefused = false;
             if (b && (!a || a.uuid !== b.uuid || a.address !== b.address)) note('info', 'Speaker set to ' + b.name + ' (' + b.address + ')');
         }
         return fullState();
@@ -536,8 +586,7 @@ module.exports = function (ctx) {
         if (sub === 'refresh') {
             post(req, res, function () {
                 return readState().then(function (r) { remember(r); return snapshot(true); }, function (e) {
-                    state.lastError = String(e && e.message || e);
-                    return snapshot(false, state.lastError);
+                    return snapshot(false, failed(e));
                 });
             });
             return true;
@@ -545,10 +594,11 @@ module.exports = function (ctx) {
         if (sub === 'lookup') {
             post(req, res, function (body) {
                 var address;
-                try { address = sonos.parseAddress(body.address); } catch (e) { throw bad('Type the IP address of a Sonos speaker, like 192.168.1.20'); }
-                return sonos.getTopology(address, LOOKUP_TIMEOUT_MS).then(function (data) {
+                // A typed address outside the home network is refused here, before anything is sent.
+                try { address = sonos.parseAddress(body.address, testHosts); } catch (e) { throw bad(e.message); }
+                return sonos.getTopology(address, LOOKUP_TIMEOUT_MS, testHosts).then(function (data) {
                     topo = { at: Date.now(), data: data, from: sonos.formatAddress(address) };
-                    return { ok: true, rooms: roomsFrom(data) };
+                    return { ok: true, rooms: roomsFrom(data), skipped: skippedFrom(data) };
                 });
             });
             return true;
@@ -559,11 +609,14 @@ module.exports = function (ctx) {
         }
         if (sub === 'discover') {
             post(req, res, function () {
-                return discoverAddresses().then(function (found) {
-                    return firstTopology(found).then(function (answer) {
-                        if (!answer) return { ok: true, rooms: [], found: found.length };
+                // found: answers that were asked for their rooms; refused: answers from addresses outside
+                // the home network, which were not.
+                return discoverAddresses().then(function (result) {
+                    var refused = result.rejected.map(function (r) { return { address: r.address, why: r.why }; });
+                    return firstTopology(result.addresses).then(function (answer) {
+                        if (!answer) return { ok: true, rooms: [], skipped: [], found: result.addresses.length, refused: refused };
                         topo = answer;
-                        return { ok: true, rooms: roomsFrom(answer.data), found: found.length };
+                        return { ok: true, rooms: roomsFrom(answer.data), skipped: skippedFrom(answer.data), found: result.addresses.length, refused: refused };
                     });
                 });
             });
@@ -574,7 +627,13 @@ module.exports = function (ctx) {
 
     return {
         start: function () {
-            cfg = normalize(ctx.config.get());
+            speakerProblem = null;
+            cfg = normalize(ctx.config.get(), testHosts, function (key, e) {
+                if (key !== 'speaker') return;
+                // Most likely saved by an older version, which took any address: say so on the page.
+                speakerProblem = 'The saved speaker was not loaded. ' + e.message + '. Choose the speaker again.';
+                note('warn', speakerProblem);
+            });
             running = true;
             busy = false;
             startReceiver();
@@ -604,9 +663,18 @@ module.exports = function (ctx) {
         },
         route: route
     };
-};
+}
 
-// For the tests.
+// What Vetro calls: no test hosts, so only home-network speaker addresses (see sonos.js).
+module.exports = function (ctx) { return createShard(ctx, null); };
+
+// For the tests only. Their simulated speakers listen on 127.0.0.1, which the Shard otherwise refuses;
+// this allows exactly the addresses listed (normally just '127.0.0.1') and nothing else. Vetro never
+// calls it, and nothing a user or a speaker sends can reach it.
+module.exports.createWithTestHosts = function (ctx, hosts) {
+    if (!Array.isArray(hosts) || !hosts.every(function (h) { return typeof h === 'string'; })) throw new Error('hosts must be a list of addresses');
+    return createShard(ctx, hosts.slice());
+};
 module.exports.validateSettings = validateSettings;
 module.exports.normalize = normalize;
 module.exports.DEFAULTS = DEFAULTS;

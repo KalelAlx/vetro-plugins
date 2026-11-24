@@ -144,6 +144,26 @@ function analyze(data, cfg, wanted) {
         wanted.forEach(function (w) {
             if (w.required && !used[w.topic]) items.push(item('bad', 'No rule for ' + w.key, 'Add a rule: trigger type “Physical key”, the key’s code, action “Publish MQTT message” to ' + w.topic + '.'));
         });
+
+        // Vetro 0.7.0 and later: keys that Vetro UI holds for itself ("reserved", e.g. its Volume bar on 68, 67 and 66). Vetro
+        // hands such a key to its own launcher before looking at rules, so a rule on it never runs. "live" is false while
+        // Vetro's launcher is off: the key then goes to the rules for now. Older Vetro versions send no "reserved" list.
+        var reserved = Array.isArray(data.remap.body.reserved) ? data.remap.body.reserved : [];
+        var taken = [], waiting = [], owner = 'Vetro UI';
+        reserved.forEach(function (k) {
+            if (!k || physicalCodes.indexOf(String(k.code)) < 0) return;
+            var what = 'key ' + k.code + (k.label ? ' (' + k.label + ')' : '');
+            if (k.name) owner = 'Vetro’s ' + k.name;
+            if (k.live === false) waiting.push(what); else taken.push(what);
+        });
+        if (taken.length) {
+            items.push(item('bad', owner + ' takes ' + taken.join(', '),
+                'Vetro sends these keys to its own on-screen display, so the rules for them never run. In Vetro UI → On-screen displays, switch off the Volume bar.'));
+        }
+        if (waiting.length) {
+            items.push(item('warn', owner + ' is on and will take ' + waiting.join(', '),
+                'The keys reach this Shard while Vetro’s launcher is off. Once it is on, Vetro sends them to its own on-screen display instead: switch off the Volume bar in Vetro UI → On-screen displays.'));
+        }
     }
 
     // 3. Remote interception.

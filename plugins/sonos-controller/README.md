@@ -28,7 +28,9 @@ counts as one room); "the whole group" changes every room grouped with it, keepi
 ## Setup
 
 1. Install and switch on this Shard, open its **Sonos** tab and choose the room: **Search the network**,
-   or type the IP address of any Sonos speaker and **Look up**.
+   or type the IP address of any Sonos speaker and **Look up** (the Sonos app shows it under Settings ›
+   System › About my system). The speakers must be on the same home network as the TV, with a local
+   address such as `192.168.1.20`; see [Network](#network) for what happens otherwise.
 2. In Vetro's **MQTT** page, set broker `127.0.0.1`, port `1883`, no user name, TLS off, keep the topic
    prefix `vetro`, enable and save. The tab shows **Vetro connected** within half a minute.
 3. In Vetro's **Remote** page, choose the remote, **Start listening**, and press Volume up, Volume down
@@ -39,15 +41,20 @@ counts as one room); "the whole group" changes every room grouped with it, keepi
    `vetro/sonos/volume-up`, `vetro/sonos/volume-down` and `vetro/sonos/mute-toggle`.
 5. In the Remote page, choose your remote in the device menu (not "Detect automatically": that one only
    listens, and Vetro refuses to intercept with it). Then turn on **Remote interception** and press
-   **Check Vetro setup** in the Sonos tab. Vetro 0.5.0 intercepts one remote device at a time; keys from
-   another remote (for example a Bluetooth one) still go to the TV.
+   **Check Vetro setup** in the Sonos tab. Vetro intercepts one remote device at a time (0.5.0 and 0.7.0);
+   keys from another remote (for example a Bluetooth one) still go to the TV.
+6. On Vetro 0.7.0 or later, keep Vetro UI's **Volume bar** switched off (Vetro UI → On-screen displays). It
+   claims Vol +, Vol − and Mute (68, 67 and 66) for Vetro's own on-screen bar, and the rules for them then
+   never run. It is off unless you turn it on; **Check Vetro setup** says when it holds one of the keys.
 
 ### When the keys do nothing
 
 Vetro runs a rule for a remote key only while **Remote interception** is running, and only for keys it
 intercepts. While **Start listening** is active, no rule runs: listening pauses interception until it is
-stopped (or after five minutes without the Remote page open). A rule whose trigger type was left on
-"MQTT message" waits for a message instead of a key, and never fires.
+stopped, or until Vetro stops it by itself (Vetro 0.5.0: after five minutes without the Remote page open;
+0.7.0: after two minutes). A rule whose trigger type was left on "MQTT message" waits for a message instead of
+a key, and never fires. On Vetro 0.7.0, a key that Vetro UI's Volume bar holds goes to that bar, not to the
+rules (step 6).
 
 **Check Vetro setup** finds these: it reads Vetro's MQTT settings, rules and interception state and lists
 what is wrong, with the last keys Vetro saw and whether they were intercepted. The Volume card shows how
@@ -67,6 +74,23 @@ None. It runs no commands.
   the TV can reach it. An optional user name and password can be required.
 - **Connects** to the Sonos speakers on your local network, HTTP port 1400: reads and sets volume and
   mute, and reads which rooms exist and how they are grouped. Nothing else is sent to them.
+- **Speakers on the home network only.** The Shard sends requests only to a private IPv4 address:
+  `10.x.x.x`, `172.16.x.x` to `172.31.x.x` or `192.168.x.x`, written as four plain numbers (an optional
+  `:port` is allowed). This applies to every address, however it arrives: typed in the Sonos tab, found by
+  the network search, listed by a speaker for the other rooms, or saved in `config.json` by an older
+  version. Everything else is refused before anything is sent to it, and the Sonos tab says why:
+  - the TV itself: `127.x.x.x` and `localhost` (Vetro's own service listens there), and `0.0.0.0`;
+  - host names such as `sonos.local`, and numbers written with leading zeros;
+  - public addresses and other ranges, such as `100.64.x.x`;
+  - self-assigned `169.254.x.x` addresses. A speaker only has one when it got no address from the router,
+    and it is then not reliably reachable from the TV anyway; the range also holds `169.254.169.254`, a
+    well-known target for misused requests. Restart the speaker or fix its network connection so it gets
+    an address from the router, then search again.
+
+  Typing such an address gives a message under **Look up**. Rooms a speaker lists at such an address, and
+  search answers from one, are left out of the room list, and the tab names them. A speaker saved by an
+  older version at such an address is not loaded: the Sonos tab says so until you choose the speaker again.
+  If a chosen room moves to such an address, the keys stop working and the tab shows the reason.
 - **Search the network** sends an SSDP search (UDP multicast to `239.255.255.250:1900`); only when you
   press the button, or when the chosen speaker stops answering and no other speaker knows where it went.
 - **Check Vetro setup** reads Vetro's own settings from Vetro's service on the TV (`127.0.0.1`, port 8099
