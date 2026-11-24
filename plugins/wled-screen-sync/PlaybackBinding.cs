@@ -26,7 +26,13 @@ internal class PlaybackBinding
             };
             using (var stat = Process.Start(start))
             {
-                if (!stat.WaitForExit(1500)) { stat.Kill(); return null; }
+                if (!stat.WaitForExit(1500))
+                {
+                    try { stat.Kill(); }
+                    catch (InvalidOperationException) {}
+                    catch (System.ComponentModel.Win32Exception) {}
+                    return null;
+                }
                 string nodes = stat.StandardOutput.ReadToEnd().Trim();
                 if (stat.ExitCode != 0 || nodes.Split('\n').Length != 2) return null;
                 return boot.ToString() + "\n" + nodes;
@@ -34,6 +40,7 @@ internal class PlaybackBinding
         }
         catch (IOException) { return null; }
         catch (FormatException) { return null; }
+        catch (InvalidOperationException) { return null; }
         catch (System.ComponentModel.Win32Exception) { return null; }
     }
     internal void Remember(string identity)

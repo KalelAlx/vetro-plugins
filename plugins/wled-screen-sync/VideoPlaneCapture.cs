@@ -134,9 +134,7 @@ namespace TizenAmbilight
         static IntPtr _bufC = IntPtr.Zero;
         static CaptureVideoMainFn _call;
 
-        /// <summary>Requested capture size. Configurable at runtime (control token `cw`/`ch`) because
-        /// the hardware scaler does the downsampling for us - we only ever consume 73 zone averages,
-        /// so requesting the full 960x540 may be wasted work in the capture path.</summary>
+        // The driver can return a fixed plane even when it accepts a smaller request.
         public static int ReqW = PlaneW;
         public static int ReqH = PlaneH;
 
@@ -173,7 +171,7 @@ namespace TizenAmbilight
         /// Returns null on success, or the error text.</summary>
         public static string Init()
         {
-            if (IntPtr.Size != 4)
+            if (IntPtr.Size != 4 || !BitConverter.IsLittleEndian)
                 return "unsupported runtime: this helper requires a 32-bit little-endian .NET runtime";
             if (_call != null) return null;
 
@@ -186,13 +184,18 @@ namespace TizenAmbilight
                     _fn = dlsym(_lib, Symbol);
                     Console.WriteLine("loaded "+name+" symbol="+(_fn != IntPtr.Zero));
                     if (_fn != IntPtr.Zero) break;
+                    try { dlclose(_lib); } catch {}
+                    _lib = IntPtr.Zero;
                 }
                 if (_fn == IntPtr.Zero) return "Video-plane function unavailable";
                 _param = Marshal.AllocHGlobal(StructBytes);
                 _bufY = Marshal.AllocHGlobal(YBytes);
                 _bufC = Marshal.AllocHGlobal(CBytes);
                 if (_param == IntPtr.Zero || _bufY == IntPtr.Zero || _bufC == IntPtr.Zero)
+                {
+                    Release();
                     return "allocation failed";
+                }
 
                 for (int i = 0; i < StructBytes; i++) Marshal.WriteByte(_param, i, 0);
 
@@ -207,6 +210,7 @@ namespace TizenAmbilight
             }
             catch (Exception e)
             {
+                Release();
                 return e.GetType().Name + ": " + e.Message;
             }
         }
@@ -573,6 +577,15 @@ namespace TizenAmbilight
             rOut = (byte)R; gOut = (byte)G; bOut = (byte)B;
         }
 
+        // Inputs to gamut conversion are already quantized to 8 bits.
+        static readonly double[] LinearChannel = BuildLinearChannel();
+        static double[] BuildLinearChannel()
+        {
+            var table = new double[256];
+            for (int i = 0; i < table.Length; i++) table[i] = Math.Pow(i / 255.0, 2.4);
+            return table;
+        }
+
         /// <summary>BT.2020 primaries -> BT.709 primaries, in LINEAR light.
         ///
         /// HDR content is mastered in BT.2020, whose primaries are WIDER; feeding those triples to a
@@ -584,9 +597,9 @@ namespace TizenAmbilight
         /// the gamut to the zone mean, rather than being forced to do everything per pixel.</summary>
         public static void ApplyGamut709(ref int R, ref int G, ref int B)
         {
-            double rl = Math.Pow(R / 255.0, 2.4);
-            double gl = Math.Pow(G / 255.0, 2.4);
-            double bl = Math.Pow(B / 255.0, 2.4);
+            double rl = LinearChannel[R];
+            double gl = LinearChannel[G];
+            double bl = LinearChannel[B];
             double r7 = 1.6605 * rl - 0.5876 * gl - 0.0728 * bl;
             double g7 = -0.1246 * rl + 1.1329 * gl - 0.0083 * bl;
             double b7 = -0.0182 * rl - 0.1006 * gl + 1.1187 * bl;

@@ -1,6 +1,15 @@
 'use strict';
 var fs = require('fs'), path = require('path'), request = require('./controller');
 var fields = require('./controls.json');
+function fromBuffer(str,enc){return typeof Buffer.from==='function'?Buffer.from(str,enc):new Buffer(str,enc);}
+function isRoutableIpv4(address) {
+    if (typeof address !== 'string') return false;
+    var parts = address.split('.');
+    if (parts.length !== 4) return false;
+    var a = Number(parts[0]), b = Number(parts[1]);
+    if (a === 0 || a === 127 || a >= 224 || (a === 169 && b === 254)) return false;
+    return true;
+}
 function valid(f, v) {
     if (f.type === 'toggle') return typeof v === 'boolean';
     if (f.type === 'color') return typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v);
@@ -8,6 +17,27 @@ function valid(f, v) {
     if (f.type === 'ipv4') return typeof v === 'string' && /^(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/.test(v);
     if (f.choices) return f.choices.indexOf(v) >= 0;
     return typeof v === 'number' && v === Math.floor(v) && v >= f.min && v <= f.max;
+}
+function readBody(req, limit, res, onBody, onTooLarge) {
+    var chunks = [], size = 0, done = false;
+    req.on('error', function() { done = true; });
+    req.on('data', function(chunk) {
+        if (done) return;
+        var buf = Buffer.isBuffer(chunk) ? chunk : fromBuffer(String(chunk), 'utf8');
+        size += buf.length;
+        if (size > limit) {
+            done = true;
+            onTooLarge();
+            if (typeof req.destroy === 'function') req.destroy();
+            return;
+        }
+        chunks.push(buf);
+    });
+    req.on('end', function() {
+        if (done) return;
+        done = true;
+        onBody(Buffer.concat(chunks).toString('utf8'));
+    });
 }
 module.exports = function(ctx, status, onModeChange) {
     function httpGet(address,pathname,timeout,cb){
@@ -56,7 +86,7 @@ module.exports = function(ctx, status, onModeChange) {
         });
     }
     function enterWled(address){
-        if(/^127\./.test(address))return Promise.resolve();
+        if(!isRoutableIpv4(address))return Promise.resolve();
         return stateRequest(address,null).then(function(state){
             if(state.on!==false)return;
             savedWledStates[address]={on:false};
@@ -66,7 +96,8 @@ module.exports = function(ctx, status, onModeChange) {
     }
     function switchWledOutput(previous,next){
         if(previous.Wled===next.Wled)return Promise.resolve();
-        return restoreWled(previous.Wled).then(function(){return enterWled(next.Wled);});
+        // Failed restores stay pending so an offline controller cannot lock out target switching.
+        return restoreWled(previous.Wled).catch(function(){}).then(function(){return enterWled(next.Wled);});
     }
     function json(res,value,code) {
         res.writeHead(code || 200,{'Content-Type':'application/json','Cache-Control':'no-store'});
@@ -92,22 +123,27 @@ module.exports = function(ctx, status, onModeChange) {
         }
         if (sub === 'preview' && req.method === 'GET') {
             try {
+                var liveState = status ? status() : null;
+                if (liveState && (liveState.state === 'stopped' || liveState.state === 'waiting' || liveState.state === 'failed')) {
+                    json(res,{rgb:''});return true;
+                }
                 var preview=path.join(ctx.dir,'runtime','preview.b64');
-                var rgb=fs.existsSync(preview)?fs.readFileSync(preview,'utf8').trim():'';
+                var rgb='';
+                if (fs.existsSync(preview)) {
+                    var st = fs.statSync(preview);
+                    if (Date.now() - st.mtime.getTime() <= 3000) rgb = fs.readFileSync(preview,'utf8').trim();
+                }
                 json(res,{rgb:/^[A-Za-z0-9+/]{192}$/.test(rgb) ? rgb : ''});
             } catch(e){json(res,{error:'Preview unavailable'},503);}
             return true;
         }
         if (sub === 'live' && req.method === 'GET') { json(res,status());return true; }
         if (sub === 'wled-probe' && req.method === 'POST') {
-            var probeBody='', probeSize=0;
-            req.on('data',function(chunk){probeSize+=chunk.length;if(probeSize<=4096)probeBody+=chunk;});
-            req.on('end',function(){
-                if(probeSize>4096)return json(res,{error:'Probe payload too large'},413);
+            readBody(req, 4096, res, function(probeBody) {
                 try {
                     var address=JSON.parse(probeBody).address;
                     var field=fields.filter(function(item){return item.key==='Wled';})[0];
-                    if(!valid(field,address))throw Error('Enter a valid WLED IPv4 address');
+                    if(!valid(field,address) || !isRoutableIpv4(address))throw Error('Enter a valid non-loopback WLED IPv4 address');
                     httpGet(address,'/json/info',4000,function(error,code,body){
                         if(error)return json(res,{error:error.message||'No WLED response at '+address},400);
                         if(code<200||code>=300)return json(res,{error:'No WLED response at '+address},400);
@@ -117,14 +153,11 @@ module.exports = function(ctx, status, onModeChange) {
                         } catch(e){json(res,{error:'Invalid WLED response'},400);}
                     });
                 } catch(error) { json(res,{error:error.message},400); }
-            });
+            }, function() { json(res,{error:'Probe payload too large'},413); });
             return true;
         }
         if (sub !== 'settings' || req.method !== 'POST') return false;
-        var body='', size=0;
-        req.on('data',function(chunk){size+=chunk.length;if(size<=4096)body+=chunk;});
-        req.on('end',function(){
-            if(size>4096)return json(res,{error:'Settings payload too large'},413);
+        readBody(req, 4096, res, function(body) {
             serial(function(){
                 if(stopped)throw Error('Shard stopped');
                 var patch=JSON.parse(body);
@@ -135,10 +168,14 @@ module.exports = function(ctx, status, onModeChange) {
                     if(!field || !valid(field,patch[k]))throw Error('Invalid setting: '+k);
                     next[k]=patch[k];
                 });
+                if(next.Wled!=='127.0.0.1' && !isRoutableIpv4(next.Wled))throw Error('Invalid setting: Wled');
                 next.Leds=next.TopCount+next.RightCount+next.BottomCount+next.LeftCount;
                 if(next.Leds<1 || next.Leds>4096)throw Error('The four sides must total 1 to 4096 LEDs.');
+                var explicitCounts=['TopCount','RightCount','BottomCount','LeftCount'].some(function(k){
+                    return Object.prototype.hasOwnProperty.call(patch,k);
+                });
                 var probe=Promise.resolve();
-                if(next.Wled!==previous.Wled && !/^127\./.test(next.Wled)){
+                if(next.Wled!==previous.Wled && isRoutableIpv4(next.Wled) && !explicitCounts){
                     probe=new Promise(function(resolve){
                         httpGet(next.Wled,'/json/info',4000,function(error,code,text){
                             if(!error && code===200){
@@ -162,14 +199,14 @@ module.exports = function(ctx, status, onModeChange) {
                     json(res,{values:next});
                 });
             }).catch(function(error){json(res,{error:error.message},400);});
-        });
+        }, function() { json(res,{error:'Settings payload too large'},413); });
         return true;
     };
     route.start=function(){
         stopped=false;persist(current);
         return serial(function(){
             return Object.keys(savedWledStates).reduce(function(chain,address){
-                return address===current.Wled?chain:chain.then(function(){return restoreWled(address);});
+                return address===current.Wled?chain:chain.then(function(){return restoreWled(address).catch(function(){});});
             },Promise.resolve()).then(function(){return enterWled(current.Wled);});
         });
     };

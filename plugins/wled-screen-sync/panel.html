@@ -39,7 +39,7 @@ function request(url,opts){return fetch(url,opts).then(function(r){return r.json
 function node(tag,parent,txt){var n=document.createElement(tag);parent.appendChild(n);if(txt!==undefined)n.textContent=txt;return n;}
 function values(){var d={};fields.forEach(function(f){if(f.key==='UiView')d[f.key]=el('view').value;else d[f.key]=f.type==='toggle'?inputs[f.key].main.checked:f.options||f.type==='color'||f.type==='ipv4'?inputs[f.key].main.value:Number(inputs[f.key].main.value);});return d;}
 function change(){var v=values();setView(v);var dirty=fields.some(function(f){return saved[f.key]!==v[f.key];});el('apply').disabled=!dirty||pending;el('msg').textContent=dirty?'Unsaved changes':'';}
-function fill(d){el('view').value=d.UiView||'simple';fields.forEach(function(f){if(f.key==='UiView'||!inputs[f.key]||!inputs[f.key].main)return;var i=inputs[f.key];if(f.type==='toggle')i.main.checked=d[f.key];else i.main.value=d[f.key];if(i.range)i.range.value=d[f.key];});change();setView();}
+function fill(d){el('view').value=d.UiView||'simple';fields.forEach(function(f){if(f.key==='UiView'||!inputs[f.key]||!inputs[f.key].main)return;var i=inputs[f.key];if(f.type==='toggle')i.main.checked=d[f.key];else i.main.value=d[f.key];if(i.range)i.range.value=d[f.key];if(i.cards)i.cards.querySelectorAll('.mode-card').forEach(function(c){c.classList.toggle('selected',c.dataset.value===d[f.key]);});});change();setView();}
 var activeGroup='Lighting';
 function applies(f,v){
  var picture=v.Lighting!=='tv-audio', combined=v.Lighting==='screen-audio';
@@ -54,12 +54,12 @@ function applies(f,v){
   return true;
  }
  if(f.group==='Sampling'&&!picture)return false;
- if(['Hdr','Reference','ZonesMode','Zones','Depth','CaptureHz'].indexOf(f.key)>=0){
+ if(['Hdr','Reference','ZonesMode','Zones','Depth','CaptureHz','CaptureResolution'].indexOf(f.key)>=0){
   if(!picture||v.Source==='sampler')return false;
   if(f.key==='Reference')return v.Hdr!=='off';
   if(f.key==='Zones')return v.ZonesMode==='custom';
  }
- return picture||['Smooth','Saturation'].indexOf(f.key)<0;
+ return picture||['Smooth','Saturation','ImmediatePicture'].indexOf(f.key)<0;
 }
 function setView(v){
  v=v||values();
@@ -93,7 +93,9 @@ function draw(data){
     activeGroup=f.group;setView();
    };}
   var row=node('div',section);row.className='row';var left=node('div',row),label=node('label',left,f.label);label.htmlFor=f.key;
-  if(f.hint)node('small',left,f.hint);var right=node('div',row);right.className='inputs';var i={};inputs[f.key]=i;
+  if(f.hint)node('small',left,f.hint);
+  if(f.key==='CaptureResolution'){var resolution=node('small',left);resolution.id='resolutionStatus';}
+  var right=node('div',row);right.className='inputs';var i={};inputs[f.key]=i;
   if(f.type==='count'){i.main=node('input',right);i.main.type='number';i.main.min=f.min;i.main.max=f.max;i.main.required=true;}
   else if(f.type==='toggle'){i.main=node('input',right);i.main.type='checkbox';}
   else if(f.type==='color'){i.main=node('input',right);i.main.type='color';}
@@ -101,7 +103,7 @@ function draw(data){
   else if(f.options||f.choices){
    if(f.key==='Lighting'){
     i.main=node('select',right);i.main.style.display='none';
-    var cards=node('div',right);cards.className='mode-cards';
+    var cards=node('div',right);cards.className='mode-cards';i.cards=cards;
     (f.choices||Object.keys(f.options)).forEach(function(k){
      var o=node('option',i.main,f.options?f.options[k]:k);o.value=k;
      var card=node('button',cards);card.type='button';card.className='mode-card';card.dataset.value=k;
@@ -117,11 +119,12 @@ function draw(data){
    [i.range,i.main].forEach(function(n){n.min=f.min;n.max=f.max;n.step=1;});i.range.oninput=function(){i.main.value=i.range.value;change();};
    node('span',right,f.unit).className='unit';
   }
+  i.main.id=f.key;
   if(f.key==='Wled'){
    addDiscovery(right,i.main);
    i.main.oninput=i.main.onchange=change;
   } else {
-   i.main.id=f.key;i.main.oninput=i.main.onchange=function(){if(i.range)i.range.value=i.main.value;change();};
+   i.main.oninput=i.main.onchange=function(){if(i.range)i.range.value=i.main.value;change();};
   }
  });
  el('view').onchange=function(){change();};
@@ -177,21 +180,30 @@ document.querySelectorAll('[data-action]').forEach(function(button){button.oncli
  .then(function(){setTimeout(function(){document.querySelectorAll('[data-action]').forEach(function(b){b.disabled=false;});},1200);});
 };});
 function metric(text,pattern,id){var match=text.match(pattern);el(id).textContent=match?match[1]:'—';}
+function showResolution(text){
+ var status=el('resolutionStatus');if(!status)return;
+ var nativeSize=text.match(/(\d+x\d+) video plane/),grid=text.match(/sampling grid (\d+x\d+)/);
+ status.textContent=nativeSize&&grid?'Live TV frame '+nativeSize[1]+' · LED sampling grid '+grid[1]:'Waiting for full-picture capture…';
+}
 function live(){
  request('live').then(function(data){
   var text=data.stdout||'';
+  showResolution(text);
   el('diagnostics').textContent=text||'Waiting for capture…';
   metric(text,/(\d+) regions/,'zones');metric(text,/capture ([\d.]+)\/s/,'fps');metric(text,/changed ([\d.]+)\/s/,'changes');
   var audio=text.match(/audio level (\d+)/)||text.match(/audio rms (\d+)/)||text.match(/audio (\d+)/);
   if(audio)el('audioLevel').textContent=audio[1]+'/255';
   else if(saved.Lighting==='tv-audio'||saved.Lighting==='screen-audio')el('audioLevel').textContent='Listening';
+  else el('audioLevel').textContent='—';
   var bands=text.match(/audio bands (\d+)\/(\d+)\/(\d+)/);
   el('audioBands').textContent=bands?bands[1]+' / '+bands[2]+' / '+bands[3]:'—';
   if(bands){el('bassBar').style.width=Math.min(100,Number(bands[1])/2.55)+'%';el('midBar').style.width=Math.min(100,Number(bands[2])/2.55)+'%';el('trebleBar').style.width=Math.min(100,Number(bands[3])/2.55)+'%';}
+  else{el('bassBar').style.width='0%';el('midBar').style.width='0%';el('trebleBar').style.width='0%';}
   var bytes=text.match(/audio bytes (\d+)/);
   if(bytes){var mb=Number(bytes[1])/1048576;el('audioBytes').textContent=(mb<1?'<1':mb.toFixed(1))+' MB';}
+  else el('audioBytes').textContent='—';
   el('status').textContent=saved.Lighting==='tv-audio'?'TV audio sync':saved.Lighting==='screen-audio'?'Screen + TV audio':saved.Lighting==='screen'?(text.indexOf('TV sampled RGB')>=0?'TV color sampler':text.indexOf('HDR10 PQ')>=0?'Full picture · HDR':text.indexOf('SDR BT.709')>=0?'Full picture · SDR':'Screen sync'):'Effect active';
- }).catch(function(){el('status').textContent='Capture status unavailable';});
+ }).catch(function(){showResolution('');el('status').textContent='Capture status unavailable';});
 }
 function preview(){
  var canvas=el('strip'),ctx=canvas.getContext('2d');

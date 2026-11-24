@@ -26,6 +26,7 @@ function instance(packet) {
     for (i = 0; i < packet.readUInt16BE(4); i++) offset = nameAt(packet, offset).end + 4;
     while (offset < packet.length) {
         var owner = nameAt(packet, offset);
+        if (owner.end + 10 > packet.length) return;
         var type = packet.readUInt16BE(owner.end);
         var size = packet.readUInt16BE(owner.end + 8);
         offset = owner.end + 10;
@@ -41,8 +42,9 @@ function instance(packet) {
 
 module.exports = function discover() {
     return new Promise(function(resolve, reject) {
-        var socket = dgram.createSocket('udp4'), devices = {}, done = false;
-        var query = new Buffer('000000000001000000000000055f776c6564045f746370056c6f63616c00000c0001', 'hex');
+        var socket = dgram.createSocket('udp4'), devices = {}, count = 0, done = false;
+        var hex = '000000000001000000000000055f776c6564045f746370056c6f63616c00000c0001';
+        var query = typeof Buffer.from === 'function' ? Buffer.from(hex, 'hex') : new Buffer(hex, 'hex');
         function finish(error) {
             if (done) return;
             done = true;
@@ -56,10 +58,14 @@ module.exports = function discover() {
         var timer = setTimeout(finish, 3000);
         socket.on('error', finish);
         socket.on('message', function(packet, peer) {
-            if (peer.port !== 5353) return;
+            if (peer.port !== 5353 || /^127\./.test(peer.address)) return;
+            if (!Object.prototype.hasOwnProperty.call(devices, peer.address) && count >= 64) return;
             try {
                 var name = instance(packet);
-                if (name) devices[peer.address] = name;
+                if (name) {
+                    if (!Object.prototype.hasOwnProperty.call(devices, peer.address)) count++;
+                    devices[peer.address] = name;
+                }
             } catch (_) { /* Ignore malformed advertisements. */ }
         });
         socket.send(query, 0, query.length, 5353, '224.0.0.251');

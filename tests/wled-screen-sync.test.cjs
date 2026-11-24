@@ -113,3 +113,63 @@ test('loopback target does not start the helper or poll HDR',async t=>{
     assert(!h.commands.some(cmd=>cmd.includes('systemd-run')||cmd.startsWith('busctl')));
     assert.equal(h.writes.length,0);
 });
+
+function routeCall(fn, method, sub, payload) {
+    return new Promise(resolve => {
+        const req = new events.EventEmitter();
+        req.method = method;
+        req.destroy = () => {};
+        let code = 200, out = '';
+        const res = {
+            writeHead(c) { code = c; },
+            end(data) { out = data ? data.toString() : ''; resolve({code, body: out ? JSON.parse(out) : null}); }
+        };
+        fn(req, res, sub);
+        if (payload !== undefined) {
+            req.emit('data', Buffer.from(typeof payload === 'string' ? payload : JSON.stringify(payload)));
+            req.emit('end');
+        }
+    });
+}
+
+test('wled-probe and settings reject loopback/special IPv4 targets and preserve explicit side counts', async t => {
+    const h = harness(t, {Wled: '127.0.0.1'});
+    const create = require('../plugins/wled-screen-sync/settings');
+    const route = create(h.ctx, () => ({state: 'active'}), () => {});
+    for (const bad of ['127.0.0.1', '0.0.0.0', '169.254.1.1', '224.0.0.1', '255.255.255.255']) {
+        const res = await routeCall(route, 'POST', 'wled-probe', {address: bad});
+        assert.equal(res.code, 400);
+    }
+    const badSetting = await routeCall(route, 'POST', 'settings', {Wled: '0.0.0.0'});
+    assert.equal(badSetting.code, 400);
+    const custom = await routeCall(route, 'POST', 'settings', {
+        Wled: '192.0.2.50', TopCount: 50, RightCount: 10, BottomCount: 0, LeftCount: 10
+    });
+    assert.equal(custom.code, 200);
+    assert.equal(custom.body.values.TopCount, 50);
+    assert.equal(custom.body.values.BottomCount, 0);
+    assert.equal(custom.body.values.Leds, 70);
+});
+
+test('unreachable prior WLED controller does not lock out target switching and stale preview is cleared', async t => {
+    const h = harness(t, {Wled: '192.0.2.1', savedWledStates: {'192.0.2.1': {on: false}}});
+    h.fail(true);
+    const create = require('../plugins/wled-screen-sync/settings');
+    let liveState = {state: 'stopped'};
+    const route = create(h.ctx, () => liveState, () => {});
+    const sw = await routeCall(route, 'POST', 'settings', {Wled: '127.0.0.1'});
+    assert.equal(sw.code, 200);
+    assert.equal(h.ctx.config.get().Wled, '127.0.0.1');
+    assert.deepEqual(h.ctx.config.get().savedWledStates, {'192.0.2.1': {on: false}});
+
+    fs.mkdirSync(path.join(h.ctx.dir, 'runtime'), {recursive: true});
+    const previewPath = path.join(h.ctx.dir, 'runtime', 'preview.b64');
+    fs.writeFileSync(previewPath, Buffer.alloc(144, 0xaa).toString('base64'));
+    const stoppedPrev = await routeCall(route, 'GET', 'preview');
+    assert.equal(stoppedPrev.body.rgb, '');
+    liveState = {state: 'active'};
+    const oldTime = new Date(Date.now() - 10000);
+    fs.utimesSync(previewPath, oldTime, oldTime);
+    const stalePrev = await routeCall(route, 'GET', 'preview');
+    assert.equal(stalePrev.body.rgb, '');
+});

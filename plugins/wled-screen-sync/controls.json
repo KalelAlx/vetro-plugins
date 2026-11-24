@@ -317,6 +317,14 @@
  },
  {
   "group": "Motion",
+  "key": "ImmediatePicture",
+  "type": "toggle",
+  "default": false,
+  "label": "Send picture immediately",
+  "hint": "Send fresh picture samples as soon as they are ready. Between samples, the stream target controls audio and smoothing updates."
+ },
+ {
+  "group": "Motion",
   "key": "SendHz",
   "label": "WLED stream target",
   "default": 62,
@@ -424,6 +432,19 @@
   "unit": "LEDs",
   "hint": "Number of addressable RGB pixels on the receiver.",
   "hidden": true
+ },
+ {
+  "group": "Sampling",
+  "key": "CaptureResolution",
+  "label": "Picture sampling resolution",
+  "default": "960x540",
+  "options": {
+   "960x540": "960 × 540",
+   "640x360": "640 × 360",
+   "480x270": "480 × 270",
+   "384x216": "384 × 216"
+  },
+  "hint": "Requests this size from the TV. If the TV supplies a larger frame, the shard samples it on the selected grid."
  },
  {
   "group": "Sampling",

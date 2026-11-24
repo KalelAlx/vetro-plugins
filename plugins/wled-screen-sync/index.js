@@ -4,13 +4,27 @@ module.exports = function(ctx) {
     var unit = 'vetro-ambilight-studio.service';
     var runtimeDir = path.join(ctx.dir,'runtime');
     var failures=0, nextCheck=0, startedAt=0, failedStarts=false, epoch=0, checks=Promise.resolve();
+    function fromBuffer(str,enc){return typeof Buffer.from==='function'?Buffer.from(str,enc):new Buffer(str,enc);}
+    function isRoutableIpv4(address){
+        if(typeof address!=='string')return false;
+        var parts=address.split('.');
+        if(parts.length!==4)return false;
+        var a=Number(parts[0]),b=Number(parts[1]);
+        if(a===0||a===127||a>=224||(a===169&&b===254))return false;
+        return true;
+    }
     function settings(){return ctx.config.get() || {};}
-    function hasTarget(){var address=settings().Wled;return !!address && !/^127\./.test(address);}
+    function hasTarget(){return isRoutableIpv4(settings().Wled);}
     function shouldRun(){return active && captureEnabled && hasTarget();}
     function queue(job){
         var result=checks.then(job);
         checks=result.catch(function(){});
         return result;
+    }
+    function clearRuntime(){
+        ['rate.txt','preview.b64'].forEach(function(name){
+            try{fs.unlinkSync(path.join(runtimeDir,name));}catch(e){}
+        });
     }
     function stopUnit(){return ctx.execute('systemctl stop '+unit,5000);}
     function resetBudget(){failures=0;startedAt=0;nextCheck=0;failedStarts=false;}
@@ -53,8 +67,8 @@ module.exports = function(ctx) {
             }
         }).catch(function(){}).then(function(){readingHdr=false;});
     }
-    function check(){
-        if(busy || !shouldRun() || Date.now()<nextCheck)return checks;
+    function check(force){
+        if((!force && busy) || !shouldRun() || Date.now()<nextCheck)return checks;
         busy=true;
         var generation=epoch;
         return queue(function(){
@@ -88,9 +102,9 @@ module.exports = function(ctx) {
     function syncMode(next,previous){
         if(next.Wled===previous.Wled)return;
         if(!hasTarget()){
-            epoch++;detail={stdout:'Select a WLED target',state:'waiting'};
+            epoch++;clearRuntime();detail={stdout:'Select a WLED target',state:'waiting'};
             queue(stopUnit).catch(function(){});
-        }else if(active && captureEnabled){resetBudget();check();}
+        }else if(active && captureEnabled){resetBudget();check(true);}
     }
     var settingsRoute = require("./settings.js")(ctx,function(){return detail;},syncMode);
     function json(res,value,code) {
@@ -100,25 +114,40 @@ module.exports = function(ctx) {
     function route(req,res,sub) {
         if (sub === "ui") return settingsRoute(req,res,sub);
         if (sub !== 'capture-action' || req.method !== 'POST') return settingsRoute(req,res,sub);
-        var body='',size=0;
-        req.on('data',function(chunk){size+=chunk.length;if(size<=128)body+=chunk;});
+        var chunks=[],size=0,done=false;
+        req.on('error',function(){done=true;});
+        req.on('data',function(chunk){
+            if(done)return;
+            var buf=Buffer.isBuffer(chunk)?chunk:fromBuffer(String(chunk),'utf8');
+            size+=buf.length;
+            if(size>128){
+                done=true;
+                json(res,{error:'Invalid capture action'},400);
+                if(typeof req.destroy==='function')req.destroy();
+                return;
+            }
+            chunks.push(buf);
+        });
         req.on('end',function(){
+            if(done)return;
+            done=true;
             try {
-                if(size>128)throw Error('Invalid capture action');
+                var body=Buffer.concat(chunks).toString('utf8');
                 var action=JSON.parse(body).action;
                 if(action==='stop'){
-                    epoch++;captureEnabled=false;resetBudget();detail={stdout:'Capture stopped',state:'stopped'};
+                    epoch++;captureEnabled=false;resetBudget();clearRuntime();detail={stdout:'Capture stopped',state:'stopped'};
                     queue(stopUnit).then(function(){json(res,{ok:true,state:'stopped'});},function(e){json(res,{error:e.message},500);});
                 } else if(action==='start' || action==='restart'){
                     if(!active || !hasTarget())throw Error('Enable the Shard and select a WLED target first');
                     var generation=++epoch;
                     captureEnabled=true;resetBudget();
                     if(action==='restart'){
+                        clearRuntime();
                         fs.writeFileSync(recoveryFile+'.tmp',String(Date.now()+8000));
                         fs.renameSync(recoveryFile+'.tmp',recoveryFile);
                     }
                     queue(function(){if(action==='restart' && generation===epoch)return stopUnit();}).then(function(){
-                        if(generation===epoch)return check();
+                        if(generation===epoch)return check(true);
                     }).then(function(){json(res,{ok:generation===epoch && !failures,state:detail.state||'active'});},function(e){json(res,{error:e.message},500);});
                 } else throw Error('Unknown capture action');
             } catch(e){json(res,{error:e.message},400);}
@@ -127,18 +156,21 @@ module.exports = function(ctx) {
     }
     return {route:route,start:function(){
         ensureRuntimeDir();
-        writeAsset('Colour.dll',new Buffer(fs.readFileSync(path.join(__dirname,'payload.b64'),'utf8'),'base64'));
+        writeAsset('Colour.dll',fromBuffer(fs.readFileSync(path.join(__dirname,'payload.b64'),'utf8'),'base64'));
         writeAsset('Colour.runtimeconfig.json',fs.readFileSync(path.join(__dirname,'Colour.runtimeconfig.json'),'utf8'));
         writeAsset('Colour.deps.json',fs.readFileSync(path.join(__dirname,'Colour.deps.json'),'utf8'));
+        var startEpoch=++epoch;
         active=true;captureEnabled=true;resetBudget();
+        clearInterval(timer);clearInterval(hdrTimer);timer=null;hdrTimer=null;
         return settingsRoute.start().catch(function(e){detail={stdout:e.message};}).then(function(){
-            if(!active)return;
-            if(!hasTarget())detail={stdout:'Select a WLED target',state:'waiting'};
+            if(!active || startEpoch!==epoch)return;
+            if(!hasTarget()){clearRuntime();detail={stdout:'Select a WLED target',state:'waiting'};}
             readHdr();hdrTimer=setInterval(readHdr,2000);timer=setInterval(check,5000);
-            return hasTarget()?check():queue(stopUnit).catch(function(){});
+            return hasTarget()?check(true):queue(stopUnit).catch(function(){});
         });
     },stop:function(){
-        epoch++;active=false;captureEnabled=false;clearInterval(timer);clearInterval(hdrTimer);
+        epoch++;active=false;captureEnabled=false;clearInterval(timer);clearInterval(hdrTimer);timer=null;hdrTimer=null;
+        clearRuntime();
         return queue(stopUnit).catch(function(){}).then(function(){return settingsRoute.stop();}).catch(function(e){
             detail={stdout:e.message,state:'restore-pending'};
         });

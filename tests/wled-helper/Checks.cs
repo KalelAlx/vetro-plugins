@@ -42,6 +42,27 @@ class Checks
         File.WriteAllText(Path.Combine(card,"id"),"USBMic");
         Require(TvAudioCapture.PlaybackDevice(root) == null);
     }
+    static void SamplingResolution()
+    {
+        foreach (int requested in new[] { 960, 640, 480, 384 })
+        {
+            foreach (int native in new[] { 960, 640, 480, 384 })
+            {
+                foreach (bool vertical in new[] { false, true })
+                {
+                    int source = vertical ? native * 9 / 16 : native;
+                    int limit = vertical ? requested * 9 / 16 : requested;
+                    int[] axis = WledAmbiPpi.SampleAxis(source, limit);
+                    Require(axis.Length == Math.Min(source, limit));
+                    for (int i = 0; i < axis.Length; i++)
+                    {
+                        Require(axis[i] == (int)((i + 0.5) * source / axis.Length));
+                        Require(axis[i] >= 0 && axis[i] < source);
+                    }
+                }
+            }
+        }
+    }
     static void Ownership()
     {
         ManualResetEventSlim inside=new ManualResetEventSlim(), finish=new ManualResetEventSlim(), released=new ManualResetEventSlim();
@@ -88,10 +109,54 @@ class Checks
         Require(high-low>0.15);
         Console.WriteLine("Combined music accent range {0:F2} to {1:F2}", low,high);
     }
+    static void TuningAndRuntimeSafety(string root)
+    {
+        // Minimal JSON with only IsRequired fields must preserve controls.json defaults via [OnDeserializing].
+        string minJson = "{\"Hdr\":\"auto\",\"Saturation\":100,\"Brightness\":100,\"Gamma\":100,\"Reference\":203,\"Black\":0,\"Red\":100,\"Green\":100,\"Blue\":100,\"Smooth\":125,\"CaptureHz\":60,\"SendHz\":62,\"Source\":\"auto\",\"Fallback\":16,\"Bars\":\"both\",\"Depth\":16,\"SampleMode\":\"average\",\"Offset\":0,\"Direction\":\"normal\",\"Wled\":\"192.0.2.10\",\"Leds\":538,\"Zones\":512,\"ZonesMode\":\"match\",\"StartCorner\":\"bottom-left\"}";
+        string cfgPath = Path.Combine(root, "tuning.json");
+        File.WriteAllText(cfgPath, minJson);
+        var fallback = new Tuning();
+        var loaded = Tuning.ReadFrom(cfgPath, fallback);
+        Require(loaded != fallback);
+        Require(loaded.AudioBlend == 35);
+        Require(loaded.AudioSensitivity == 100);
+        Require(loaded.Protocol == "ddp");
+        Require(loaded.HasTarget);
+
+        // Out-of-range Depth, negative Smooth, and malformed/non-routable Wled must be rejected or marked non-target.
+        File.WriteAllText(cfgPath, minJson.Replace("\"Depth\":16", "\"Depth\":500"));
+        Require(Tuning.ReadFrom(cfgPath, loaded) == loaded);
+        File.WriteAllText(cfgPath, minJson.Replace("\"Smooth\":125", "\"Smooth\":-5"));
+        Require(Tuning.ReadFrom(cfgPath, loaded) == loaded);
+        File.WriteAllText(cfgPath, minJson.Replace("192.0.2.10", "not-an-ip"));
+        Require(Tuning.ReadFrom(cfgPath, loaded) == loaded);
+        Require(!Tuning.IsRoutableTarget("0.0.0.0"));
+        Require(!Tuning.IsRoutableTarget("127.0.0.1"));
+        Require(!Tuning.IsRoutableTarget("169.254.1.1"));
+        Require(!Tuning.IsRoutableTarget("224.0.0.1"));
+        Require(!Tuning.IsRoutableTarget("255.255.255.255"));
+        Require(Tuning.IsRoutableTarget("192.168.1.50"));
+
+        // WriteRuntimeFile writes atomically and refuses symlink targets and symlink directories.
+        string runtime = Path.Combine(root, "rt");
+        Directory.CreateDirectory(runtime);
+        Require(WledAmbiPpi.WriteRuntimeFile(runtime, "rate.txt", "ok"));
+        Require(File.ReadAllText(Path.Combine(runtime, "rate.txt")) == "ok");
+        string victim = Path.Combine(root, "victim.txt");
+        File.WriteAllText(victim, "untouched");
+        string symFile = Path.Combine(runtime, "preview.b64");
+        File.CreateSymbolicLink(symFile, victim);
+        Require(!WledAmbiPpi.WriteRuntimeFile(runtime, "preview.b64", "overwritten"));
+        Require(File.ReadAllText(victim) == "untouched");
+        string symDir = Path.Combine(root, "rt-link");
+        Directory.CreateSymbolicLink(symDir, runtime);
+        Require(!WledAmbiPpi.WriteRuntimeFile(symDir, "rate.txt", "bad"));
+        Require(File.ReadAllText(Path.Combine(runtime, "rate.txt")) == "ok");
+    }
     static void Main()
     {
         string tmp=Directory.CreateTempSubdirectory().FullName;
-        try {CombinedDynamics();Identity(tmp);Ownership();Console.WriteLine("PASS device identity and single-owner capture lifecycle");}
+        try {SamplingResolution();CombinedDynamics();Identity(tmp);Ownership();TuningAndRuntimeSafety(tmp);Console.WriteLine("PASS device identity, tuning safety, and single-owner capture lifecycle");}
         finally {Directory.Delete(tmp,true);}
     }
 }

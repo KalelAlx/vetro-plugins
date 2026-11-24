@@ -2,6 +2,8 @@
 
 Samples TV picture colors and sends them to a configured WLED controller over DDP (UDP 4048). Configure the controller's IPv4 address under WLED target. Capture starts when a non-loopback controller address is configured. The default strip count is 538. Full-picture capture depends on firmware and input mode. The color sampler can provide lower resolution fallback.
 
+In Advanced → Sampling, **Picture sampling resolution** requests a frame size and sets the maximum grid used by the LED zones and black-bar detector. The live readout shows both the native TV frame and the LED sampling grid. The QN85B returned 960 × 540 for all four requests. A smaller grid on this model takes effect after the native capture call.
+
 On the QN55QN85BAFXZC, 0.6.1 screen sync sent 16 sampled regions with zero reported UDP errors. Both audio modes received PCM from the default device 5 after a reboot confirmed its dump identity. The meters read zero during the initial samples. See the [per-mode observations and ALSA listings](../../tests/manual/wled-screen-sync-qn85b.md) for the test routing and limitations. Game Mode and source switching can make full-picture capture unavailable.
 
 ## Dashboard and discovery

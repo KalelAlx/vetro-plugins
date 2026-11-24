@@ -40,6 +40,8 @@ internal static class WledAmbiPpi
     private static extern int VconfGetInt(string key, out int value);
     [DllImport("libdl.so.2", EntryPoint = "dlopen", CharSet = CharSet.Ansi)]
     private static extern IntPtr dlopen(string filename, int flags);
+    [DllImport("libdl.so.2", EntryPoint = "dlclose")]
+    private static extern int dlclose(IntPtr handle);
     [DllImport("libdl.so.2", EntryPoint = "dlsym", CharSet = CharSet.Ansi)]
     private static extern IntPtr dlsym(IntPtr handle, string symbol);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int CondFn(IntPtr buf);
@@ -61,16 +63,16 @@ internal static class WledAmbiPpi
         IntPtr fp = dlsym(lib, "cs_ve_set_rgb_measure_position");
         IntPtr fx = dlsym(lib, "cs_ve_get_rgb_measure_pixel");
         if (fc == IntPtr.Zero || fp == IntPtr.Zero || fx == IntPtr.Zero)
-        { _ppiDead = true; Console.WriteLine("ppiVe: dlsym fail (API ausente nesta firmware)"); return false; }
+        { _ppiDead = true; try { dlclose(lib); } catch {} Console.WriteLine("ppiVe: dlsym fail (API ausente nesta firmware)"); return false; }
         IntPtr cb = Marshal.AllocHGlobal(256);
         Marshal.Copy(new byte[256], 0, cb, 256);
         int rc = Marshal.GetDelegateForFunctionPointer<CondFn>(fc)(cb);
-        if (rc < 0) { Marshal.FreeHGlobal(cb); Console.WriteLine("ppiVe: cond rc=" + rc); return false; }
+        if (rc < 0) { Marshal.FreeHGlobal(cb); _ppiDead = true; try { dlclose(lib); } catch {} Console.WriteLine("ppiVe: cond rc=" + rc); return false; }
         _slots = Marshal.ReadInt32(cb, 0); _blkW = Marshal.ReadInt32(cb, 4);
         _blkH = Marshal.ReadInt32(cb, 8); _sleepMs = Marshal.ReadInt32(cb, 12);
         _fullW = Marshal.ReadInt32(cb, 16); _fullH = Marshal.ReadInt32(cb, 20);
         Marshal.FreeHGlobal(cb);
-        if (_slots <= 0 || _fullW <= 0) { Console.WriteLine("ppiVe: bad cond"); return false; }
+        if (_slots <= 0 || _fullW <= 0) { _ppiDead = true; try { dlclose(lib); } catch {} Console.WriteLine("ppiVe: bad cond"); return false; }
         if (_slots > 16) _slots = 16;
         if (_sleepMs < 1) _sleepMs = 20;
         _pos = Marshal.GetDelegateForFunctionPointer<PosFn>(fp);
@@ -139,9 +141,11 @@ internal static class WledAmbiPpi
     private static readonly int[] FourSpots = {2,6,10,14};
     private static readonly int[] EightSpots = {1,3,5,7,9,11,13,15};
     private static readonly int[] FourRegions = {1,1,1,1}, EightRegions = {2,2,2,2};
-    private static byte[] PpiVeFrame()
+    private static int ClampByte(int value) { return value < 0 ? 0 : value > 255 ? 255 : value; }
+    private static void PpiVeFrame()
     {
-        int n = tuning.Fallback;
+        var config = tuning;
+        int n = config.Fallback;
         int[] indices = n==4 ? FourSpots : n==8 ? EightSpots : null;
         int[] counts = n==4 ? FourRegions : n==8 ? EightRegions : FullRegions;
         var rgb = fallbackRgb;
@@ -161,22 +165,22 @@ internal static class WledAmbiPpi
                 if (_pix(s, _colBuf) < 0) throw new InvalidOperationException("Color unavailable");
                 {
                     int i = base_ + s;
-                    rgb[i * 3] = Marshal.ReadInt32(_colBuf, 0) >> 2;   // 10-bit -> 8-bit
-                    rgb[i * 3 + 1] = Marshal.ReadInt32(_colBuf, 4) >> 2;
-                    rgb[i * 3 + 2] = Marshal.ReadInt32(_colBuf, 8) >> 2;
+                    rgb[i * 3] = ClampByte(Marshal.ReadInt32(_colBuf, 0) >> 2);   // 10-bit -> 8-bit
+                    rgb[i * 3 + 1] = ClampByte(Marshal.ReadInt32(_colBuf, 4) >> 2);
+                    rgb[i * 3 + 2] = ClampByte(Marshal.ReadInt32(_colBuf, 8) >> 2);
                 }
             }
             if (base_ + cnt == n || fallbackInitialized) {
                 var mapped = MapRegions(rgb, counts);
-                if(tuning.SampleMode=="whole") ApplyWholeStrip(mapped);
-                if(tuning.SampleMode=="side") ApplySides(mapped);
-                if(tuning.SampleMode=="accent" || tuning.SampleMode=="highlight")
-                    SelectSideSamples(mapped, tuning.SampleMode=="accent");
-                latest = mapped;
+                if(config.SampleMode=="whole") ApplyWholeStrip(mapped);
+                if(config.SampleMode=="side") ApplySides(mapped);
+                if(config.SampleMode=="accent" || config.SampleMode=="highlight")
+                    SelectSideSamples(mapped, config.SampleMode=="accent");
+                Publish(mapped);
             }
         }
         fallbackInitialized = true;
-        return latest;
+
     }
 
     private static byte[] MapRegions(int[] rgb, int[] spotN)
@@ -204,6 +208,19 @@ internal static class WledAmbiPpi
     private static string frameStatus;
     private static uint pictureSignature;
     private static int pictureWidth, pictureHeight;
+    private static int nativeWidth, nativeHeight;
+    private static int[] sampleColumns, sampleRows;
+
+    // Resolve only the pixels needed by the LED zones and black-bar detector.
+    // Pixel centers on the smaller grid map to the nearest native luma sample.
+    internal static int[] SampleAxis(int native, int requested)
+    {
+        int length = Math.Min(native, requested);
+        var axis = new int[length];
+        for (int i = 0; i < length; i++)
+            axis[i] = (2 * i + 1) * native / (2 * length);
+        return axis;
+    }
     private static int zoneSampleFrame;
     private static double inputChroma, averagedChroma;
     private static double planeMilliseconds;
@@ -223,17 +240,20 @@ internal static class WledAmbiPpi
         private int candidate, votes;
         public int Inset { get; private set; }
 
-        public unsafe void Scan(byte* luma, int stride, int length, int crossLength, bool rows)
+        public void Reset() { candidate = votes = Inset = 0; }
+
+        public unsafe void Scan(byte* luma, int stride, int[] along, int[] across, bool rows)
         {
+            int length = along.Length;
             int observed = 0;
             for (int depth = 0; depth < length / 4; depth++)
             {
                 int nearBright = 0, farBright = 0;
                 for (int sample = 1; sample <= 15; sample++)
                 {
-                    int cross = sample * crossLength / 16;
-                    int far = length - 1 - depth;
-                    if (luma[rows ? depth * stride + cross : cross * stride + depth] > 24) nearBright++;
+                    int cross = across[sample * across.Length / 16];
+                    int near = along[depth], far = along[length - 1 - depth];
+                    if (luma[rows ? near * stride + cross : cross * stride + near] > 24) nearBright++;
                     if (luma[rows ? far * stride + cross : cross * stride + far] > 24) farBright++;
                 }
                 if (nearBright >= 4 || farBright >= 4)
@@ -250,6 +270,7 @@ internal static class WledAmbiPpi
 
     private static unsafe bool ReadPlane()
     {
+        var config = tuning;
         var frame = TizenAmbilight.VideoPlaneCapture.Capture();
         if (!frame.HasFrame || frame.RetWidth < 384 || frame.RetHeight < 216 || frame.RetWidth > 960 || frame.RetHeight > 540)
         {
@@ -257,17 +278,29 @@ internal static class WledAmbiPpi
             return false;
         }
         planeMilliseconds += frame.CaptureMs;
-        pictureWidth = frame.W;
-        pictureHeight = frame.H;
+        int widthLimit = TizenAmbilight.VideoPlaneCapture.ReqW;
+        int heightLimit = TizenAmbilight.VideoPlaneCapture.ReqH;
+        if (nativeWidth != frame.W || nativeHeight != frame.H ||
+            pictureWidth != Math.Min(frame.W, widthLimit) || pictureHeight != Math.Min(frame.H, heightLimit))
+        {
+            nativeWidth = frame.W;
+            nativeHeight = frame.H;
+            sampleColumns = SampleAxis(nativeWidth, widthLimit);
+            sampleRows = SampleAxis(nativeHeight, heightLimit);
+            pictureWidth = sampleColumns.Length;
+            pictureHeight = sampleRows.Length;
+            PictureRows.Reset();
+            PictureColumns.Reset();
+        }
         byte* luma = (byte*)TizenAmbilight.VideoPlaneCapture.LumaBuffer.ToPointer();
         byte* chroma = (byte*)TizenAmbilight.VideoPlaneCapture.ChromaBuffer.ToPointer();
-        bool cropRows = tuning.Bars == "both" || tuning.Bars == "rows";
-        bool cropColumns = tuning.Bars == "both" || tuning.Bars == "columns";
-        if (cropRows) PictureRows.Scan(luma, frame.YStride, frame.H, frame.W, true);
-        if (cropColumns) PictureColumns.Scan(luma, frame.YStride, frame.W, frame.H, false);
-        int left = cropColumns ? Math.Min(PictureColumns.Inset, frame.W / 4) : 0;
-        int top = cropRows ? Math.Min(PictureRows.Inset, frame.H / 4) : 0;
-        int width = frame.W - 2 * left, height = frame.H - 2 * top;
+        bool cropRows = config.Bars == "both" || config.Bars == "rows";
+        bool cropColumns = config.Bars == "both" || config.Bars == "columns";
+        if (cropRows) PictureRows.Scan(luma, frame.YStride, sampleRows, sampleColumns, true);
+        if (cropColumns) PictureColumns.Scan(luma, frame.YStride, sampleColumns, sampleRows, false);
+        int left = cropColumns ? Math.Min(PictureColumns.Inset, pictureWidth / 4) : 0;
+        int top = cropRows ? Math.Min(PictureRows.Inset, pictureHeight / 4) : 0;
+        int width = pictureWidth - 2 * left, height = pictureHeight - 2 * top;
         uint fingerprint = 2166136261;
         for (int j=0;j<frame.YStride*frame.H;j+=251)
             fingerprint = unchecked((fingerprint ^ luma[j])*16777619);
@@ -275,15 +308,16 @@ internal static class WledAmbiPpi
             fingerprint = unchecked((fingerprint ^ chroma[j])*16777619);
         pictureSignature = fingerprint;
         bool measure = (++zoneSampleFrame % 32 == 0);
-        var zoneColors = new byte[tuning.EffectiveZones * 3];
+        int effectiveZones = config.EffectiveZones;
+        var zoneColors = new byte[effectiveZones * 3];
         var pixels = new byte[LedCount * 3];
         var sampleY = new int[4];
         var sampleU = new int[4];
         var sampleV = new int[4];
         long wholeY=0, wholeU=0, wholeV=0;
-        for (int zone = 0; zone < tuning.EffectiveZones; zone++)
+        for (int zone = 0; zone < effectiveZones; zone++)
         {
-            int i = zone * LedCount / tuning.EffectiveZones;
+            int i = zone * LedCount / effectiveZones;
             bool horizontal = i < TopN || (i >= TopN + RightN && i < LedCount - LeftN);
             int x, y, dx = 0, dy = 0;
             if (i < TopN) { x = left + (2*i+1)*width/(2*TopN); y = top+1; dy = 1; }
@@ -293,18 +327,19 @@ internal static class WledAmbiPpi
             int lum=0, u=0, v=0;
             for (int sample=0; sample<4; sample++)
             {
-                int depth = sample*tuning.Depth/4;
-                int px=x+dx*depth, py=y+dy*depth;
+                int depth = sample*config.Depth/4;
+                int px=sampleColumns[Math.Max(0,Math.Min(pictureWidth-1,x+dx*depth))];
+                int py=sampleRows[Math.Max(0,Math.Min(pictureHeight-1,y+dy*depth))];
                 int uv=(py/2)*frame.CStride+(px & ~1);
                 int yValue=luma[py*frame.YStride+px];
                 int uValue=chroma[uv], vValue=chroma[uv+1];
                 sampleY[sample]=yValue;sampleU[sample]=uValue;sampleV[sample]=vValue;
                 if (measure) inputChroma += Math.Sqrt((uValue-128)*(uValue-128)+(vValue-128)*(vValue-128));
             }
-            AggregateSamples(sampleY,sampleU,sampleV,out lum,out u,out v);
+            AggregateSamples(config.SampleMode,sampleY,sampleU,sampleV,out lum,out u,out v);
             int l=298*(lum-64), cb=u-512, cr=v-512;
             if (measure) averagedChroma += Math.Sqrt(cb*cb+cr*cr);
-            if(tuning.SampleMode=="whole") {
+            if(config.SampleMode=="whole") {
                 wholeY+=lum; wholeU+=u; wholeV+=v;
                 continue;
             }
@@ -324,10 +359,10 @@ internal static class WledAmbiPpi
                 zoneColors[3*zone+2]=Channel(l+541*cb);
             }
         }
-        if(tuning.SampleMode=="whole") {
-            int lum=(int)((wholeY+tuning.EffectiveZones/2)/tuning.EffectiveZones);
-            int u=(int)((wholeU+tuning.EffectiveZones/2)/tuning.EffectiveZones);
-            int v=(int)((wholeV+tuning.EffectiveZones/2)/tuning.EffectiveZones);
+        if(config.SampleMode=="whole") {
+            int lum=(int)((wholeY+effectiveZones/2)/effectiveZones);
+            int u=(int)((wholeU+effectiveZones/2)/effectiveZones);
+            int v=(int)((wholeV+effectiveZones/2)/effectiveZones);
             int l=298*(lum-64), cb=u-512, cr=v-512;
             byte red,green,blue;
             if(hdr) {
@@ -338,25 +373,25 @@ internal static class WledAmbiPpi
                 red=Channel(l+459*cr); green=Channel(l-55*cb-136*cr); blue=Channel(l+541*cb);
             }
             for(int i=0;i<LedCount;i++){pixels[i*3]=red;pixels[i*3+1]=green;pixels[i*3+2]=blue;}
-            latest=pixels;
+            Publish(pixels);
             frameStatus=frame.W+"x"+frame.H+" video plane";
             return true;
         }
         for (int i=0;i<LedCount;i++)
         {
-            int src = (i * tuning.EffectiveZones / LedCount) * 3;
+            int src = (i * effectiveZones / LedCount) * 3;
             pixels[3*i]=zoneColors[src];pixels[3*i+1]=zoneColors[src+1];pixels[3*i+2]=zoneColors[src+2];
         }
-        if(tuning.SampleMode=="side") ApplySides(pixels);
-        latest = pixels;
+        if(config.SampleMode=="side") ApplySides(pixels);
+        Publish(pixels);
         frameStatus = frame.W + "x" + frame.H + " video plane";
         return true;
     }
 
-    private static void AggregateSamples(int[] ys,int[] us,int[] vs,out int y,out int u,out int v)
+    private static void AggregateSamples(string sampleMode,int[] ys,int[] us,int[] vs,out int y,out int u,out int v)
     {
-        bool accent = tuning.SampleMode == "accent";
-        if (accent || tuning.SampleMode == "highlight")
+        bool accent = sampleMode == "accent";
+        if (accent || sampleMode == "highlight")
         {
             int best = 0, bestScore = -1;
             for (int i = 0; i < ys.Length; i++) {
@@ -367,20 +402,20 @@ internal static class WledAmbiPpi
             y = ys[best] * 4; u = us[best] * 4; v = vs[best] * 4;
             return;
         }
-        if(tuning.SampleMode=="edge" || tuning.SampleMode=="inner")
+        if(sampleMode=="edge" || sampleMode=="inner")
         {
-            int i=tuning.SampleMode=="edge"?0:3;
+            int i=sampleMode=="edge"?0:3;
             y=ys[i]*4;u=us[i]*4;v=vs[i]*4;
             return;
         }
-        if(tuning.SampleMode=="median")
+        if(sampleMode=="median")
         {
             y=Median4(ys[0],ys[1],ys[2],ys[3])*4;
             u=Median4(us[0],us[1],us[2],us[3])*4;
             v=Median4(vs[0],vs[1],vs[2],vs[3])*4;
             return;
         }
-        if(tuning.SampleMode=="weighted")
+        if(sampleMode=="weighted")
         {
             y=(ys[0]*4+ys[1]*3+ys[2]*2+ys[3]+5)/10*4;
             u=(us[0]*4+us[1]*3+us[2]*2+us[3]+5)/10*4;
@@ -441,39 +476,93 @@ internal static class WledAmbiPpi
 
     private static byte Channel(int scaled) { return (byte)Math.Max(0,Math.Min(255,(scaled+512)>>10)); }
 
-    private static volatile byte[] latest;
+    private sealed class SampledPicture
+    {
+        internal readonly byte[] Colors;
+        internal readonly long Ready = Stopwatch.GetTimestamp();
+        internal SampledPicture(byte[] colors) { Colors = colors; }
+    }
+
+    private static readonly object pictureLock = new object();
+    private static volatile SampledPicture latest;
+    private static volatile int meanSendDelayUs;
+
+    private static void Publish(byte[] colors)
+    {
+        lock (pictureLock)
+        {
+            latest = new SampledPicture(colors);
+            System.Threading.Monitor.Pulse(pictureLock);
+        }
+    }
+
+    private static void WaitForPicture(SampledPicture rendered, int timeout)
+    {
+        lock (pictureLock)
+        {
+            if (latest == rendered) System.Threading.Monitor.Wait(pictureLock, timeout);
+        }
+    }
     private static string statusDir;
 
+    internal static bool WriteRuntimeFile(string dir, string filename, string content)
+    {
+        if (String.IsNullOrEmpty(dir)) return false;
+        try
+        {
+            var dirAttrs = System.IO.File.GetAttributes(dir);
+            if ((dirAttrs & System.IO.FileAttributes.Directory) == 0 || (dirAttrs & System.IO.FileAttributes.ReparsePoint) != 0)
+                return false;
+            string target = System.IO.Path.Combine(dir, filename);
+            if (System.IO.File.Exists(target) && (System.IO.File.GetAttributes(target) & System.IO.FileAttributes.ReparsePoint) != 0)
+                return false;
+            string tmp = System.IO.Path.Combine(dir, "." + filename + "." + Guid.NewGuid().ToString("N") + ".tmp");
+            byte[] bytes = System.Text.Encoding.UTF8.GetBytes(content ?? "");
+            try
+            {
+                using (var fs = new System.IO.FileStream(tmp, System.IO.FileMode.CreateNew, System.IO.FileAccess.Write, System.IO.FileShare.None))
+                {
+                    fs.Write(bytes, 0, bytes.Length);
+                }
+                System.IO.File.Move(tmp, target, true);
+                return true;
+            }
+            catch
+            {
+                try { System.IO.File.Delete(tmp); } catch {}
+                return false;
+            }
+        }
+        catch (System.IO.IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+    }
     private static void WriteStatus(string status)
     {
         if (String.IsNullOrEmpty(statusDir)) statusDir = AppContext.BaseDirectory;
-        try { System.IO.File.WriteAllText(System.IO.Path.Combine(statusDir,"rate.txt"),status); }
-        catch (System.IO.IOException) {}
+        WriteRuntimeFile(statusDir, "rate.txt", status);
     }
     private static void WritePreview(string preview)
     {
         if (String.IsNullOrEmpty(statusDir)) statusDir = AppContext.BaseDirectory;
-        try { System.IO.File.WriteAllText(System.IO.Path.Combine(statusDir,"preview.b64"),preview); }
-        catch (System.IO.IOException) {}
+        WriteRuntimeFile(statusDir, "preview.b64", preview);
     }
-
-
 
     private static bool WantsPicture(Tuning config) { return config.Lighting == "screen" || config.Lighting == "screen-audio"; }
 
     private static volatile bool samplerUnavailable;
     private static void Capture(Func<bool> wanted)
     {
-        if (!PpiVeInit())
+        bool ppiAvailable = PpiVeInit();
+        int scans = 0, changed = 0, phase = 0;
+
+        frameStatus = TizenAmbilight.VideoPlaneCapture.Init();
+        bool available = frameStatus == null;
+        if (!ppiAvailable && !available)
         {
-            WriteStatus("Helper unavailable: TV video sampler API is not supported");
+            WriteStatus("Helper unavailable: neither full-picture nor TV video sampler API is supported");
             samplerUnavailable = true;
             return;
         }
-        int scans = 0, changed = 0, phase = 0;
-        TizenAmbilight.VideoPlaneCapture.SetRequestSize(960, 540);
-        frameStatus = TizenAmbilight.VideoPlaneCapture.Init();
-        bool available = frameStatus == null;
         double deadline = 0;
         var uptime = Stopwatch.StartNew();
         double retryMs = 0, nextHdrRead = 0;
@@ -487,7 +576,7 @@ internal static class WledAmbiPpi
         var window = Stopwatch.StartNew();
         while (wanted())
         {
-            var previous = latest;
+            var previous = latest.Colors;
             double started = uptime.Elapsed.TotalMilliseconds;
             if(started>=nextSourcePoll) {
                 int observed;
@@ -521,6 +610,8 @@ internal static class WledAmbiPpi
                 var old = tuning;
                 tuning = Tuning.Read(old);
                 if (old.Fallback != tuning.Fallback || old.EffectiveZones != tuning.EffectiveZones) fallbackInitialized = false;
+                int captureWidth = tuning.CaptureWidth;
+                TizenAmbilight.VideoPlaneCapture.SetRequestSize(captureWidth, captureWidth * 9 / 16);
                 TizenAmbilight.VideoPlaneCapture.HdrPeakNits = tuning.Reference;
                 try {
                     long recoveryDeadline;
@@ -567,18 +658,18 @@ internal static class WledAmbiPpi
                 }
             }
             bool pictureRecovery = pictureRecoveryUntil > DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            if (!full && !pictureRecovery && (samplerOnly || !available || consecutiveFailures >= 3))
+            if (ppiAvailable && !full && !pictureRecovery && (samplerOnly || !available || consecutiveFailures >= 3))
             {
-                try { latest = PpiVeFrame(); }
+                try { PpiVeFrame(); }
                 catch (InvalidOperationException) { fallbackErrors++; }
             }
             bool difference = false;
-            var colors = latest;
+            var colors = latest.Colors;
             for (int i = 0; i < colors.Length && !difference; i++)
                 difference = colors[i] != previous[i];
             if (full ? oldSignature != pictureSignature : difference) changed++;
-            if (!full && phase % 8 == 0 && (tuning.Bars=="both" || tuning.Bars=="rows")) Rows.Probe(true);
-            if (!full && phase % 8 == 4 && (tuning.Bars=="both" || tuning.Bars=="columns")) Columns.Probe(false);
+            if (ppiAvailable && !full && phase % 8 == 0 && (tuning.Bars=="both" || tuning.Bars=="rows")) Rows.Probe(true);
+            if (ppiAvailable && !full && phase % 8 == 4 && (tuning.Bars=="both" || tuning.Bars=="columns")) Columns.Probe(false);
             phase = (phase + 1) % 8;
             deadline += 1000.0 / (full ? tuning.CaptureHz : 25);
             double remaining = deadline - uptime.Elapsed.TotalMilliseconds;
@@ -590,6 +681,9 @@ internal static class WledAmbiPpi
                 samplerOnly ? "Selected TV sampler" : frameStatus, _slots, _sleepMs, scans / window.Elapsed.TotalSeconds, changed / window.Elapsed.TotalSeconds, full ? (tuning.Bars=="both" || tuning.Bars=="rows" ? (double)PictureRows.Inset / pictureHeight : 0) : Rows.Inset, full ? (tuning.Bars=="both" || tuning.Bars=="columns" ? (double)PictureColumns.Inset / pictureWidth : 0) : Columns.Inset, full ? tuning.EffectiveZones : tuning.Fallback, tuning.SendHz, planeMilliseconds/scans);
             status += String.Format(", plane errors {0}, fallback errors {1}, longest read {2:F0} ms, UDP errors {3}",
                 planeErrors, fallbackErrors, longestReadMs, System.Threading.Interlocked.CompareExchange(ref udpErrors,0,0));
+            status += String.Format(", sample to UDP {0:F2} ms", meanSendDelayUs / 1000.0);
+            if (full) status += String.Format(", sampling grid {0}x{1}", pictureWidth, pictureHeight);
+            if (!samplerOnly) status += String.Format(", requested {0}x{1}", TizenAmbilight.VideoPlaneCapture.ReqW, TizenAmbilight.VideoPlaneCapture.ReqH);
             status += ", WLED " + tuning.Wled;
             status += ", TV input " + (haveSource ? sourceType.ToString() : "unknown") + ", capture reopens " + nativeReopens;
             status += full ? (hdr ? ", HDR10 PQ BT.2020" : ", SDR BT.709") : pictureRecovery ? ", trying full-picture recovery" : ", TV sampled RGB";
@@ -612,18 +706,22 @@ internal static class WledAmbiPpi
         for(int i=0;i<args.Length;i++)
         {
             if(args[i]=="--check-platform") {
-                if(IntPtr.Size!=4) { Console.Error.WriteLine("32-bit little-endian runtime required"); return 2; }
+                if(IntPtr.Size!=4 || !BitConverter.IsLittleEndian) { Console.Error.WriteLine("32-bit little-endian runtime required"); return 2; }
                 return 0;
             }
             if(args[i]=="--status-dir" && i+1<args.Length) statusDir=args[++i];
         }
-        if(IntPtr.Size!=4) { Console.Error.WriteLine("32-bit little-endian runtime required"); return 2; }
+        if(IntPtr.Size!=4 || !BitConverter.IsLittleEndian) { Console.Error.WriteLine("32-bit little-endian runtime required"); return 2; }
         TvAudioCapture.Binding = new PlaybackBinding(statusDir);
         TvAudioCapture.PlaybackDevice("/proc/asound", TvAudioCapture.Binding);
         tuning = Tuning.Read(tuning);
-        latest = new byte[LedCount * 3];
-        var current = Array.ConvertAll(latest, value => (double)value);
+        Publish(new byte[LedCount * 3]);
+        var current = Array.ConvertAll(latest.Colors, value => (double)value);
         var picturePixels = new byte[current.Length];
+        SampledPicture rendered = null, timed = null;
+        long delayTicks = 0;
+        int delayCount = 0;
+        var delayWindow = Stopwatch.StartNew();
         var pixels = new byte[tuning.Leds * 3];
         Tuning mappedConfig = null;
         StripPixel[] layout = null;
@@ -727,8 +825,14 @@ internal static class WledAmbiPpi
                 {
                     double blend = config.Smooth == 0 ? 1 : 1 - Math.Exp(-(now - previous) / config.Smooth);
                     previous = now;
-                    var target = latest;
-                    for (int i = 0; i < current.Length; i++)
+                    rendered = latest;
+                    var target = rendered.Colors;
+                    if (config.Smooth == 0)
+                    {
+                        Buffer.BlockCopy(target, 0, picturePixels, 0, target.Length);
+                        Array.Copy(target, current, target.Length);
+                    }
+                    else for (int i = 0; i < current.Length; i++)
                     {
                         current[i] += (target[i] - current[i]) * blend;
                         picturePixels[i] = (byte)Math.Round(current[i]);
@@ -760,6 +864,19 @@ internal static class WledAmbiPpi
                             destination = config.Wled;
                         }
                         SendDdp(udp, endpoint, pixels, config, preview);
+                        if (WantsPicture(config) && rendered != timed)
+                        {
+                            delayTicks += Stopwatch.GetTimestamp() - rendered.Ready;
+                            delayCount++;
+                            timed = rendered;
+                            if (delayWindow.ElapsedMilliseconds >= 3000)
+                            {
+                                meanSendDelayUs = (int)(delayTicks * 1000000.0 / Stopwatch.Frequency / delayCount);
+                                delayTicks = 0;
+                                delayCount = 0;
+                                delayWindow.Restart();
+                            }
+                        }
                     }
                     if (previewDue) {
                         nextPreview = now + 1000;
@@ -767,6 +884,16 @@ internal static class WledAmbiPpi
                     }
                 }
                 catch (SocketException) { System.Threading.Interlocked.Increment(ref udpErrors); }
+                if (config.ImmediatePicture && WantsPicture(config))
+                {
+                    // A fresh picture wakes the sender. Timeouts still drive audio, smoothing and config reads.
+                    double interval = config.Lighting == "screen" && config.Smooth == 0 && mix >= 1
+                        ? 100 : 1000.0 / config.SendHz;
+                    int timeout = (int)Math.Ceiling(now + interval - clock.Elapsed.TotalMilliseconds);
+                    if (timeout > 0) WaitForPicture(rendered, timeout);
+                    next = clock.Elapsed.TotalMilliseconds;
+                    continue;
+                }
                 next += 1000.0 / config.SendHz;
                 double remaining = next - clock.Elapsed.TotalMilliseconds;
                 if (remaining > 0) System.Threading.Thread.Sleep((int)Math.Ceiling(remaining));

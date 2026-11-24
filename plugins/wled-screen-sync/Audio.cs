@@ -150,6 +150,13 @@ internal static class TvAudioCapture
     {
         return (Stopwatch.GetTimestamp() - stamp) * 1000.0 / Stopwatch.Frequency;
     }
+    private static void TryKill(Process p)
+    {
+        if (p == null) return;
+        try { if (!p.HasExited) p.Kill(); }
+        catch (InvalidOperationException) {}
+        catch (System.ComponentModel.Win32Exception) {}
+    }
 
     // Called by the output thread. Reuse the recorder between audio-enabled modes.
     public static AudioAnalyzer.Frame Update(bool enabled, Tuning settings, bool sourceChanged)
@@ -164,7 +171,7 @@ internal static class TvAudioCapture
                 if (child != null)
                 {
                     intentionalStop = !enabled || sourceChanged;
-                    try { child.Kill(); } catch (InvalidOperationException) {}
+                    TryKill(child);
                     child = null;
                 }
                 if (!enabled) current = default(AudioAnalyzer.Frame);
@@ -258,7 +265,7 @@ internal static class TvAudioCapture
                 lock (Sync) { deviceLabel = " (" + device + ")"; }
                 string arguments = "-q -D " + device + " -f S16_LE -r 48000 -c 2 -t raw";
                 if (useShortPeriods) arguments += " -F 10000 -B 40000";
-                var start = new ProcessStartInfo("arecord", arguments)
+                var start = new ProcessStartInfo("/usr/bin/arecord", arguments)
                     { UseShellExecute=false, RedirectStandardOutput=true };
                 bool received = false, interrupted = false, launched = false;
                 int blocks = 0;
@@ -296,14 +303,14 @@ internal static class TvAudioCapture
                                 bytes += used;
                             }
                             used = 0;
-                            if (++blocks == 200) { retryMs = 250; failures = 0; }
+                            if (++blocks == 200) { retryMs = 250; failures = 0; useShortPeriods = true; }
                         }
                     }
                     catch (Exception e) { Console.Error.WriteLine("Audio capture: " + e.Message); }
                     finally
                     {
                         lock (Sync) { interrupted = !requested || (launched && intentionalStop); child = null; state = "reconnecting"; }
-                        try { if (!process.HasExited) process.Kill(); } catch (InvalidOperationException) {}
+                        TryKill(process);
                     }
                 }
                 if (!interrupted && ++failures >= 5)
