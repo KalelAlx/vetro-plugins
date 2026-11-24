@@ -156,15 +156,15 @@
     {
       "id": "vpn",
       "name": "VPN",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "author": "piecifra",
       "description": "WireGuard VPN on the TV: NordVPN, or your own configs from any provider or server. Kill switch, split tunnel. Talks to api.nordvpn.com, your VPN and GitHub.",
       "permissions": [
         "exec"
       ],
-      "url": "dist/vpn-1.1.0.vplugin",
-      "sha256": "c0c51fe19c3de0762ea7ca9919e969f9745b65326ac36f21993ed0418a128984",
-      "size": 127458
+      "url": "dist/vpn-1.1.1.vplugin",
+      "sha256": "e185e7c62f2b628fa2366de2b2e5b7307b78a4fb0d569824f6c77b4c0241ae5f",
+      "size": 141552
     },
     {
       "id": "youtube",
