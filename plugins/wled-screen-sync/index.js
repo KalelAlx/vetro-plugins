@@ -4,7 +4,6 @@ module.exports = function(ctx) {
     var unit = 'vetro-ambilight-studio.service';
     var runtimeDir = path.join(ctx.dir,'runtime');
     var failures=0, nextCheck=0, startedAt=0, failedStarts=false, epoch=0, checks=Promise.resolve();
-    function fromBuffer(str,enc){return typeof Buffer.from==='function'?Buffer.from(str,enc):new Buffer(str,enc);}
     function isRoutableIpv4(address){
         if(typeof address!=='string')return false;
         var parts=address.split('.');
@@ -118,7 +117,7 @@ module.exports = function(ctx) {
         req.on('error',function(){done=true;});
         req.on('data',function(chunk){
             if(done)return;
-            var buf=Buffer.isBuffer(chunk)?chunk:fromBuffer(String(chunk),'utf8');
+            var buf=Buffer.isBuffer(chunk)?chunk:new Buffer(String(chunk),'utf8');
             size+=buf.length;
             if(size>128){
                 done=true;
@@ -156,7 +155,7 @@ module.exports = function(ctx) {
     }
     return {route:route,start:function(){
         ensureRuntimeDir();
-        writeAsset('Colour.dll',fromBuffer(fs.readFileSync(path.join(__dirname,'payload.b64'),'utf8'),'base64'));
+        writeAsset('Colour.dll',new Buffer(fs.readFileSync(path.join(__dirname,'payload.b64'),'utf8'),'base64'));
         writeAsset('Colour.runtimeconfig.json',fs.readFileSync(path.join(__dirname,'Colour.runtimeconfig.json'),'utf8'));
         writeAsset('Colour.deps.json',fs.readFileSync(path.join(__dirname,'Colour.deps.json'),'utf8'));
         var startEpoch=++epoch;

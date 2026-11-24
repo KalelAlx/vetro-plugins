@@ -1,7 +1,6 @@
 'use strict';
 var fs = require('fs'), path = require('path'), request = require('./controller');
 var fields = require('./controls.json');
-function fromBuffer(str,enc){return typeof Buffer.from==='function'?Buffer.from(str,enc):new Buffer(str,enc);}
 function isRoutableIpv4(address) {
     if (typeof address !== 'string') return false;
     var parts = address.split('.');
@@ -23,7 +22,7 @@ function readBody(req, limit, res, onBody, onTooLarge) {
     req.on('error', function() { done = true; });
     req.on('data', function(chunk) {
         if (done) return;
-        var buf = Buffer.isBuffer(chunk) ? chunk : fromBuffer(String(chunk), 'utf8');
+        var buf = Buffer.isBuffer(chunk) ? chunk : new Buffer(String(chunk), 'utf8');
         size += buf.length;
         if (size > limit) {
             done = true;
@@ -85,19 +84,26 @@ module.exports = function(ctx, status, onModeChange) {
             delete savedWledStates[address];persist(current);
         });
     }
-    function enterWled(address){
+    function enterWled(address,brightness){
         if(!isRoutableIpv4(address))return Promise.resolve();
         return stateRequest(address,null).then(function(state){
-            if(state.on!==false)return;
-            savedWledStates[address]={on:false};
-            persist(current); // Durable before the controller is changed.
-            return stateRequest(address,{on:true});
+            var patch={bri:Math.round(brightness*255/100)};
+            if(state.on===false){
+                savedWledStates[address]={on:false};
+                persist(current); // Durable before the controller is changed.
+                patch.on=true;
+            }
+            return stateRequest(address,patch);
         });
+    }
+    function applyWledBrightness(address,brightness){
+        if(!isRoutableIpv4(address))return Promise.resolve();
+        return stateRequest(address,{bri:Math.round(brightness*255/100)});
     }
     function switchWledOutput(previous,next){
         if(previous.Wled===next.Wled)return Promise.resolve();
         // Failed restores stay pending so an offline controller cannot lock out target switching.
-        return restoreWled(previous.Wled).catch(function(){}).then(function(){return enterWled(next.Wled);});
+        return restoreWled(previous.Wled).catch(function(){}).then(function(){return enterWled(next.Wled,next.Brightness);});
     }
     function json(res,value,code) {
         res.writeHead(code || 200,{'Content-Type':'application/json','Cache-Control':'no-store'});
@@ -194,6 +200,9 @@ module.exports = function(ctx, status, onModeChange) {
                     });
                 }
                 return probe.then(function(){return switchWledOutput(previous,next);}).then(function(){
+                    if(Object.prototype.hasOwnProperty.call(patch,'Brightness'))
+                        return applyWledBrightness(next.Wled,next.Brightness);
+                }).then(function(){
                     current=next;persist(next);
                     if(onModeChange)onModeChange(next,previous);
                     json(res,{values:next});

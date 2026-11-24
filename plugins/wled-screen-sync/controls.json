@@ -234,11 +234,12 @@
  {
   "group": "Color",
   "key": "Brightness",
-  "label": "LED brightness",
+  "label": "WLED brightness",
   "default": 100,
   "min": 0,
   "max": 100,
-  "unit": "%"
+  "unit": "%",
+  "hint": "Sets the controller brightness in WLED. This is the strip’s brightness control."
  },
  {
   "group": "Color",

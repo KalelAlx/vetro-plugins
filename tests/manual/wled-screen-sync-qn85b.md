@@ -230,3 +230,21 @@ In the sampled silence windows of combined mode, the controller reported zero on
 ### Reopening the verified primary dump in 0.8.7
 
 Installed the updated helper, rebooted once, and confirmed the primary label before recording. During controlled DLNA playback the test switched from TV audio to Screen sync and back, restarted the capture service, then switched through Screen sync into Screen + TV audio. The kernel showed numeric ID 5 and an empty name after the first open. All subsequent audio runs selected the primary dump. WLED live pixels brightened on the tones after both the mode switch and the service restart. After the restart the dashboard reported level 95 with bands 44/73/38. Combined mode reported 538 picture regions and level 107 with bands 55/87/46, then zero during silence. The test ended in Screen sync.
+
+## 0.9.5 mode check on QN55QN85BAFXZC
+
+Installed the published PR bundle from commit `67a8137` and read live diagnostics approximately 12 seconds after selecting each mode.
+
+| Mode | Observed result |
+| --- | --- |
+| Screen sync | Native capture reported `rc=-2` (not ready). The TV color sampler supplied 16 regions at 1.38 scans/s, with zero reported UDP errors. |
+| TV audio sync | The verified playback dump `hw:0,5` supplied 1,330,560 PCM bytes. RMS was 41 and peak was 22. The reaction level and all three bands read zero. |
+| Screen + TV audio | Native capture reported `rc=-2`. The fallback supplied 16 regions at 2.36 scans/s, with zero reported UDP errors. The verified playback dump supplied 4,272,000 PCM bytes and was quiet at the observation. |
+
+The reviewer's separate run reported native `rc=-1`. The 16-region fallback was the picture path verified in this three-mode run. Earlier 0.9.5 dashboard checks saw a 960 × 540 native plane on the same TV under different conditions. This run did not verify visual LED output or audio reaction to controlled playback. The TV was returned to its previous build and lighting mode.
+
+## 0.9.6 follow-up on QN55QN85BAFXZC
+
+A live Screen sync check on the installed 0.9.6 build reported a 960 × 540 native video plane with 538 regions at 38.15–38.21 scans/s, with zero reported plane or UDP errors. These are scan rates. The picture changed 0–1.80 times/s in the observed windows.
+
+The owner reports that full-picture capture currently works mainly on external inputs. On the Tizen Home screen and in built-in Tizen apps, capture switches to the TV color sampler. Live diagnostics identified the input as unknown during this check, so the readings verify native capture on the active source and the source-by-source behavior reflects the owner's observations.

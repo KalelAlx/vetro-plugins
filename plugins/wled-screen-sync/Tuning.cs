@@ -165,12 +165,12 @@ internal sealed class Tuning
     {
         var table=new byte[256];
         for(int i=0;i<256;i++)
-            table[i]=(byte)Math.Min(255,Math.Round(255*Math.Pow(i/255.0,Gamma/100.0)*Brightness*gain/10000.0));
+            table[i]=(byte)Math.Min(255,Math.Round(255*Math.Pow(i/255.0,Gamma/100.0)*gain/100.0));
         return table;
     }
     public void Apply(byte[] rgb)
     {
-        if(redCurve==null || (Black==0 && Brightness==100 && Gamma==100 && Red==100 && Green==100 && Blue==100 && Saturation==100))return;
+        if(redCurve==null || (Black==0 && Gamma==100 && Red==100 && Green==100 && Blue==100 && Saturation==100))return;
         for(int i=0;i<rgb.Length;i+=3){
             int r=rgb[i],g=rgb[i+1],b=rgb[i+2];
             if(Math.Max(r,Math.Max(g,b))<=Black) {rgb[i]=rgb[i+1]=rgb[i+2]=0;continue;}

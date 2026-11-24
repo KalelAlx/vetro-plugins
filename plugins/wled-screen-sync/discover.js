@@ -44,7 +44,7 @@ module.exports = function discover() {
     return new Promise(function(resolve, reject) {
         var socket = dgram.createSocket('udp4'), devices = {}, count = 0, done = false;
         var hex = '000000000001000000000000055f776c6564045f746370056c6f63616c00000c0001';
-        var query = typeof Buffer.from === 'function' ? Buffer.from(hex, 'hex') : new Buffer(hex, 'hex');
+        var query = new Buffer(hex, 'hex');
         function finish(error) {
             if (done) return;
             done = true;
