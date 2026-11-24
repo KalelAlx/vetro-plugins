@@ -17,6 +17,9 @@ var fs = require('fs');
 var path = require('path');
 var os = require('os');
 var net = require('net');
+var crypto = require('crypto');
+
+var MAX_TOKEN_DEVICES = 16;
 
 var LATIN_MAP = {
     ' ': 'space',
@@ -835,6 +838,83 @@ module.exports = function (ctx) {
         });
     }
 
+    function getClientIp(req) {
+        var ip = '';
+        if (req && req.socket && req.socket.remoteAddress) {
+            ip = String(req.socket.remoteAddress);
+        } else if (req && req.connection && req.connection.remoteAddress) {
+            ip = String(req.connection.remoteAddress);
+        }
+        return ip.replace(/^::ffff:/i, '');
+    }
+
+    function lookupArpMac(ip) {
+        if (!ip || !/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return null;
+        try {
+            var arp = fs.readFileSync('/proc/net/arp', 'utf8');
+            var lines = arp.split('\n');
+            for (var i = 1; i < lines.length; i++) {
+                var cols = lines[i].replace(/^\s+|\s+$/g, '').split(/\s+/);
+                if (cols.length >= 4 && cols[0] === ip && cols[2] !== '0x0') {
+                    var mac = cols[3].toLowerCase();
+                    if (/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/.test(mac) && mac !== '00:00:00:00:00:00') {
+                        return mac;
+                    }
+                }
+            }
+        } catch (e) {}
+        return null;
+    }
+
+    function ensureTokenSalt(cfg) {
+        if (cfg && typeof cfg.salt === 'string' && /^[0-9a-f]{32,64}$/.test(cfg.salt)) {
+            return cfg.salt;
+        }
+        var salt = crypto.randomBytes(16).toString('hex');
+        if (cfg && typeof cfg === 'object') {
+            cfg.salt = salt;
+            try { saveCfg(cfg); } catch (e) {}
+        }
+        return salt;
+    }
+
+    function getClientIdentity(req, cfg, createSalt) {
+        var salt = (cfg && typeof cfg.salt === 'string' && /^[0-9a-f]{32,64}$/.test(cfg.salt))
+            ? cfg.salt
+            : (createSalt ? ensureTokenSalt(cfg) : null);
+        if (!salt) return null;
+        var ip = getClientIp(req);
+        var mac = lookupArpMac(ip);
+        var raw = mac ? ('mac:' + mac) : (ip ? ('ip:' + ip) : 'local');
+        var key = crypto.createHmac('sha256', salt).update(raw).digest('hex').slice(0, 16);
+        return { key: key, tag: key.slice(0, 4) };
+    }
+
+    function hasAnySavedToken(cfg) {
+        if (!cfg || typeof cfg !== 'object') return false;
+        if (typeof cfg.token === 'string' && cfg.token.length > 0) return true;
+        if (cfg.tokens && typeof cfg.tokens === 'object' && !Array.isArray(cfg.tokens)) {
+            var keys = Object.keys(cfg.tokens);
+            for (var i = 0; i < keys.length; i++) {
+                var v = cfg.tokens[keys[i]];
+                if (typeof v === 'string' && v.length > 0) return true;
+            }
+        }
+        return false;
+    }
+
+    function getTokenForClient(cfg, req, createSalt) {
+        var id = getClientIdentity(req, cfg, createSalt);
+        var tokens = (cfg && cfg.tokens && typeof cfg.tokens === 'object' && !Array.isArray(cfg.tokens)) ? cfg.tokens : null;
+        if (id && tokens && typeof tokens[id.key] === 'string' && tokens[id.key].length > 0) {
+            return { token: tokens[id.key], deviceTag: id.tag, legacy: false };
+        }
+        if (cfg && typeof cfg.token === 'string' && cfg.token.length > 0 && (!tokens || Object.keys(tokens).length === 0)) {
+            return { token: cfg.token, deviceTag: id ? id.tag : null, legacy: true };
+        }
+        return { token: null, deviceTag: id ? id.tag : null, legacy: false };
+    }
+
     return {
         start: function () {
             loadStreamConfig();
@@ -851,8 +931,7 @@ module.exports = function (ctx) {
         },
 
         status: function () {
-            var cfg = getCfg();
-            return { paired: !!(cfg && cfg.token) };
+            return { paired: hasAnySavedToken(getCfg()) };
         },
 
         route: function (req, res, sub) {
@@ -868,28 +947,34 @@ module.exports = function (ctx) {
             // GET api/status
             if (sub === 'status' && req.method === 'GET') {
                 var cfg0 = getCfg();
+                var tok0 = getTokenForClient(cfg0, req, false);
                 res.writeHead(200, {
                     'content-type': 'application/json',
                     'cache-control': 'no-store'
                 });
                 res.end(JSON.stringify({
                     ok: true,
-                    paired: !!(cfg0 && cfg0.token),
+                    paired: !!tok0.token,
                     tvIp: getTvIp(),
                     stream: getStreamConfig()
                 }));
                 return true;
             }
 
-            // GET api/token — returns saved Samsung Remote pairing token to the sandboxed Shard page
+            // GET api/token — returns caller device's own Samsung Remote pairing token and anonymous tag
             if (sub === 'token' && req.method === 'GET') {
                 var cfgTok = getCfg();
-                var tok = (typeof cfgTok.token === 'string' && cfgTok.token.length > 0) ? cfgTok.token : null;
+                var tokInfo = getTokenForClient(cfgTok, req, true);
                 res.writeHead(200, {
                     'content-type': 'application/json',
                     'cache-control': 'no-store'
                 });
-                res.end(JSON.stringify({ ok: true, token: tok }));
+                res.end(JSON.stringify({
+                    ok: true,
+                    token: tokInfo.token,
+                    deviceTag: tokInfo.deviceTag,
+                    legacy: tokInfo.legacy || undefined
+                }));
                 return true;
             }
 
@@ -902,13 +987,50 @@ module.exports = function (ctx) {
                         return;
                     }
                     try {
-                        var c2 = getCfg();
-                        if (typeof parsed.token === 'string' && parsed.token.length > 0 && parsed.token.length < 256) {
-                            c2.token = parsed.token;
-                        } else if (parsed.reset || parsed.token === null) {
-                            delete c2.token;
+                        var isSave = (typeof parsed.token === 'string' && parsed.token.length > 0 && parsed.token.length < 256);
+                        var isReset = (!isSave && !!(parsed.reset || parsed.token === null));
+                        if (isSave || isReset) {
+                            var c2 = getCfg();
+                            var devId = getClientIdentity(req, c2, isSave);
+                            var srcMap = (c2.tokens && typeof c2.tokens === 'object' && !Array.isArray(c2.tokens)) ? c2.tokens : {};
+                            var map = {};
+                            var existingKeys = Object.keys(srcMap);
+                            for (var kIdx = 0; kIdx < existingKeys.length; kIdx++) {
+                                var kName = existingKeys[kIdx];
+                                if (typeof srcMap[kName] === 'string' && srcMap[kName].length > 0) {
+                                    map[kName] = srcMap[kName];
+                                }
+                            }
+                            var changed = false;
+                            if (isSave && devId && devId.key) {
+                                if (map[devId.key] !== parsed.token || c2.token !== undefined || existingKeys[existingKeys.length - 1] !== devId.key) {
+                                    delete map[devId.key];
+                                    map[devId.key] = parsed.token;
+                                    var keys = Object.keys(map);
+                                    while (keys.length > MAX_TOKEN_DEVICES) {
+                                        delete map[keys.shift()];
+                                    }
+                                    c2.tokens = map;
+                                    delete c2.token;
+                                    changed = true;
+                                }
+                            } else if (isReset) {
+                                if (devId && devId.key && Object.prototype.hasOwnProperty.call(map, devId.key)) {
+                                    delete map[devId.key];
+                                    if (Object.keys(map).length > 0) {
+                                        c2.tokens = map;
+                                    } else {
+                                        delete c2.tokens;
+                                    }
+                                    changed = true;
+                                }
+                                if (Object.prototype.hasOwnProperty.call(c2, 'token')) {
+                                    delete c2.token;
+                                    changed = true;
+                                }
+                            }
+                            if (changed) saveCfg(c2);
                         }
-                        saveCfg(c2);
                         res.writeHead(200, { 'content-type': 'application/json' });
                         res.end(JSON.stringify({ ok: true }));
                     } catch (e) {

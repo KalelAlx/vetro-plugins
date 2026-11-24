@@ -1203,6 +1203,8 @@ var hostFromUrl = location.hostname || "";
 var isFallbackHost = !hostFromUrl || hostFromUrl === "127.0.0.1" || hostFromUrl === "localhost" || hostFromUrl === "::1" || hostFromUrl === "[::1]";
 var tvIp = hostFromUrl || "127.0.0.1";
 var tvToken = null;
+var tvDeviceTag = null;
+var tvTokenIsLegacy = false;
 var ws = null;
 var wsConnected = false;
 var wsConnecting = false;
@@ -1281,6 +1283,7 @@ if (btnRepair) {
     }
     authAttempts = 0;
     tvToken = null;
+    tvTokenIsLegacy = false;
     lastRetryStatus = null;
     setStatus("Resetting pairing…", "busy");
     fetch("savetoken", {
@@ -1369,14 +1372,6 @@ function utf8b64(str) {
 }
 
 function getClientAppName() {
-  var stored = null;
-  try {
-    stored = localStorage.getItem("vetro_client_name");
-  } catch (e) {}
-  if (stored && typeof stored === "string" && stored.replace(/^\s+|\s+$/g, "").length > 0) {
-    return stored.replace(/^\s+|\s+$/g, "").slice(0, 30);
-  }
-
   var ua = (typeof navigator !== "undefined" && navigator.userAgent) || "";
   var dev = "Device";
   if (/Android/i.test(ua)) dev = "Android";
@@ -1386,6 +1381,10 @@ function getClientAppName() {
   else if (/Macintosh|Mac OS/i.test(ua)) dev = "Mac";
   else if (/CrOS/i.test(ua)) dev = "ChromeOS";
   else if (/Linux/i.test(ua)) dev = "Linux";
+
+  if (tvDeviceTag && /^[0-9a-f]{4}$/i.test(tvDeviceTag)) {
+    return ("Vetro (" + dev + " #" + tvDeviceTag.toLowerCase() + ")").slice(0, 30);
+  }
 
   var browser = "";
   if (/Edg\//i.test(ua)) browser = "Edge";
@@ -1591,18 +1590,21 @@ function initWS() {
           wsMouseReady = true;
         } catch (mErr) {}
         var t = msg.data && msg.data.token ? String(msg.data.token) : null;
-        if (t && t !== tvToken) {
-          tvToken = t;
+        if ((t && t !== tvToken) || (tvTokenIsLegacy && (t || tvToken))) {
+          var saveTok = t || tvToken;
+          tvToken = saveTok;
+          tvTokenIsLegacy = false;
           fetch("savetoken", {
             method: "POST",
             headers: { "Content-Type": "text/plain" },
-            body: JSON.stringify({ token: t })
+            body: JSON.stringify({ token: saveTok })
           }).catch(function () {});
         }
         setStatus("Connected ✔ Ready", "ok");
         certBanner.style.display = "none";
       } else if (msg.event === "ms.channel.unauthorized") {
         tvToken = null;
+        tvTokenIsLegacy = false;
         fetch("savetoken", {
           method: "POST",
           headers: { "Content-Type": "text/plain" },
@@ -1661,6 +1663,10 @@ Promise.all([
     updateStreamConfigUI(d.stream);
   }
   if (tokRes && tokRes.ok) {
+    tvDeviceTag = (typeof tokRes.deviceTag === "string" && /^[0-9a-f]{4}$/i.test(tokRes.deviceTag))
+      ? tokRes.deviceTag.toLowerCase()
+      : null;
+    tvTokenIsLegacy = !!tokRes.legacy;
     if (typeof tokRes.token === "string" && tokRes.token.length > 0) {
       tvToken = tokRes.token;
     } else {

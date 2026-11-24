@@ -65,8 +65,8 @@
         "exec"
       ],
       "url": "dist/keyboard-1.1.0.vplugin",
-      "sha256": "1792159fedb7cd70e55bfee00e946fb57e90983b88336c322fc1cbbf85530f6b",
-      "size": 186077
+      "sha256": "0f2e00eaa6501e7268bc5f630787375e8b1cd77b9fe5088ace031c95628e31b8",
+      "size": 193034
     },
     {
       "id": "nordvpn",
