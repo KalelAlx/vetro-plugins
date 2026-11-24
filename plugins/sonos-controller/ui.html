@@ -142,7 +142,8 @@ details[open] summary { margin-bottom: 12px; }
 
     <section class="card" aria-labelledby="spkTitle">
       <h2 id="spkTitle">Speaker</h2>
-      <p class="muted small">The room the remote controls. Search the network, or type the IP address of any Sonos speaker (the Sonos app shows it under Settings › System › About my system).</p>
+      <p class="muted small">The room the remote controls. Search the network, or type the IP address of any Sonos speaker (the Sonos app shows it under Settings › System › About my system). Only speakers on your home network are used: addresses like 192.168.x.x, 10.x.x.x or 172.16.x.x to 172.31.x.x.</p>
+      <div class="msg bad" id="spkProblem" hidden></div>
       <div class="row">
         <button type="button" id="searchBtn">Search the network</button>
       </div>
@@ -151,6 +152,7 @@ details[open] summary { margin-bottom: 12px; }
         <button type="button" id="lookupBtn">Look up</button>
       </div>
       <div class="msg" id="spkMsg"></div>
+      <div class="msg bad" id="spkSkipped" hidden></div>
       <div class="rooms" id="rooms"></div>
       <div class="field" style="margin-top:12px">
         <span>Volume keys change</span>
@@ -197,7 +199,7 @@ details[open] summary { margin-bottom: 12px; }
           </table>
           <p class="muted small" style="margin-top:8px">Also available: <span class="copy" data-topic="mute"></span> and <span class="copy" data-topic="unmute"></span>. The payload does not matter.</p>
         </li>
-        <li>In the Remote page, <b>choose your remote</b> in the device menu (not “Detect automatically”, which only listens), then <b>turn on Remote interception</b>. Vetro intercepts one remote at a time: on a 2022 The Frame the infrared remote is “wt61p807 rc device”. From then on those keys go to Sonos instead of the TV: the TV’s own volume no longer changes. Then press <b>Check Vetro setup</b> above.</li>
+        <li>In the Remote page, <b>choose your remote</b> in the device menu (not “Detect automatically”, which only listens), then <b>turn on Remote interception</b>. Vetro intercepts one remote at a time: on a 2022 The Frame the infrared remote is “wt61p807 rc device”. From then on those keys go to Sonos instead of the TV: the TV’s own volume no longer changes. On Vetro 0.7.0 or later, keep Vetro UI’s <b>Volume bar</b> off (Vetro UI → On-screen displays): it takes these keys for itself. Then press <b>Check Vetro setup</b> above.</li>
       </ol>
       <p class="muted small">If a key press reaches Vetro while this Shard is off, Vetro gives the keys back to the TV for a minute, then tries again.</p>
     </section>
@@ -250,7 +252,10 @@ details[open] summary { margin-bottom: 12px; }
     $('setupCheck').hidden = !connected;
     var hasSpeaker = !!set.speaker;
     $('speakerDot').className = 'dot ' + (!hasSpeaker ? '' : sp.lastError ? 'bad' : sp.readAt ? 'ok' : 'warn');
-    $('speakerText').textContent = hasSpeaker ? set.speaker.name + (sp.lastError ? ' · not reachable' : '') : 'No speaker';
+    $('speakerText').textContent = hasSpeaker ? set.speaker.name + (sp.lastError ? (sp.addressRefused ? ' · address not used' : ' · not reachable') : '') : 'No speaker';
+    // The saved speaker was not loaded (an address outside the home network, from an older version).
+    $('spkProblem').hidden = !s.speakerProblem;
+    $('spkProblem').textContent = s.speakerProblem || '';
 
     $('roomName').textContent = hasSpeaker ? set.speaker.name + (set.target === 'group' ? ' and its group' : '') + ' · ' + set.speaker.address : 'Choose a speaker first.';
     var v = typeof sp.volume === 'number' ? sp.volume : null;
@@ -375,9 +380,18 @@ details[open] summary { margin-bottom: 12px; }
     msg(msgId, 'Saving…');
     return request('settings', update).then(function (s) { render(s); msg(msgId, okText || 'Saved', 'ok'); }, function (e) { msg(msgId, e.message, 'bad'); });
   }
+  // Rooms and search answers the Shard left out because their address is not on the home network.
+  function showSkipped(d) {
+    var parts = [];
+    (d.skipped || []).forEach(function (r) { parts.push(r.name + ' (' + r.address + ') ' + r.why); });
+    (d.refused || []).forEach(function (r) { parts.push('a search answer from ' + r.address + ' ' + r.why); });
+    $('spkSkipped').hidden = !parts.length;
+    $('spkSkipped').textContent = parts.length ? 'Left out: ' + parts.join('; ') + '.' : '';
+  }
   function showRooms(d, emptyText) {
     rooms = d.rooms || [];
     msg('spkMsg', rooms.length ? 'Choose the room your TV plays through:' : emptyText, rooms.length ? '' : 'bad');
+    showSkipped(d);
     renderRooms();
   }
 
@@ -394,16 +408,20 @@ details[open] summary { margin-bottom: 12px; }
     request('check', {}).then(load, function (e) { $('checkInfo').textContent = e.message; }).then(function () { $('checkBtn').disabled = false; });
   });
   $('searchBtn').addEventListener('click', function () {
-    var btn = this; btn.disabled = true; msg('spkMsg', 'Searching…');
+    var btn = this; btn.disabled = true; msg('spkMsg', 'Searching…'); showSkipped({});
     request('discover', {}).then(function (d) {
-      showRooms(d, d.found ? 'Found speakers, but none answered. Type an IP address instead.' : 'No speakers answered the search. Type an IP address instead.');
+      showRooms(d, d.found ? 'Found speakers, but none answered. Type an IP address instead.'
+        : d.refused && d.refused.length ? 'No speaker answered from your home network. Type an IP address instead.'
+          : 'No speakers answered the search. Type an IP address instead.');
     }, function (e) { msg('spkMsg', e.message, 'bad'); }).then(function () { btn.disabled = false; });
   });
   function lookup() {
     var a = $('addrInput').value.trim();
     if (!a) { msg('spkMsg', 'Type an IP address first.', 'bad'); return; }
-    $('lookupBtn').disabled = true; msg('spkMsg', 'Asking ' + a + '…');
-    request('lookup', { address: a }).then(function (d) { showRooms(d, 'That speaker lists no rooms.'); }, function (e) { msg('spkMsg', e.message, 'bad'); })
+    $('lookupBtn').disabled = true; msg('spkMsg', 'Asking ' + a + '…'); showSkipped({});
+    request('lookup', { address: a }).then(function (d) {
+      showRooms(d, d.skipped && d.skipped.length ? 'That speaker lists no rooms on your home network.' : 'That speaker lists no rooms.');
+    }, function (e) { msg('spkMsg', e.message, 'bad'); })
       .then(function () { $('lookupBtn').disabled = false; });
   }
   $('lookupBtn').addEventListener('click', lookup);
