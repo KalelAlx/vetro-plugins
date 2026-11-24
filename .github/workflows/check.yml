@@ -40,6 +40,19 @@ jobs:
           node-version: ${{ matrix.node }}
       # No signing secret, write token, or real TV commands in these jobs.
       - run: node scripts/test-runtime.cjs
+  # Binaries in helpers/ (too big for a bundle) must rebuild byte for byte from their source in the repo.
+  helpers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: {persist-credentials: false}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: {go-version: 1.26.0, cache: false}
+      - run: go version
+      - working-directory: plugins/vpn/nordtv
+        run: go test ./...
+      - run: sh scripts/check-helpers.sh
   guide-helper:
     needs: validate
     runs-on: ubuntu-latest
@@ -56,11 +69,14 @@ jobs:
       - run: node scripts/build-eightbitdo-guide-helper.cjs --check
   check:
     if: always()
-    needs: [validate, runtime, guide-helper]
+    needs: [validate, runtime, helpers, guide-helper]
     runs-on: ubuntu-latest
     steps:
       - env:
           VALIDATION: ${{ needs.validate.result }}
           RUNTIME: ${{ needs.runtime.result }}
+          HELPERS: ${{ needs.helpers.result }}
           GUIDE_HELPER: ${{ needs.guide-helper.result }}
-        run: test "$VALIDATION" = success && test "$RUNTIME" = success && test "$GUIDE_HELPER" = success
+        run: >-
+          test "$VALIDATION" = success && test "$RUNTIME" = success && test "$HELPERS" = success &&
+          test "$GUIDE_HELPER" = success

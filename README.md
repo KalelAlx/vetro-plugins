@@ -13,13 +13,13 @@ dashboard shows under **Vetro Shards → Load plugin catalog**, the source of ev
 | [`eightbitdo-guide`](plugins/eightbitdo-guide) | Open Vetro with Guide on the Bluetooth 8BitDo Ultimate 2 Wireless; forward other buttons and axes | `exec` | augusto1024 |
 | [`home-assistant`](plugins/home-assistant) | A **Control center card** (Vetro 0.7.0): switch Home Assistant lights, switches, scenes and scripts from the TV's remote. The example Shard for the card API | none | andrearicci93 |
 | [`keyboard`](plugins/keyboard) | Text typing for system inputs, live 1080p screen preview, and full TV remote with navigation, volume, channel, playback and color keys | `exec` | abdoghanem2011 |
-| [`nordvpn`](plugins/nordvpn) | NordVPN (NordLynx/WireGuard) on the TV: country, kill switch, reconnect | `exec` | piecifra |
 | [`prometheus`](plugins/prometheus) | Prometheus metrics for the TV (CPU, memory, network, Wi-Fi signal, SoC temperature), `node_exporter` names | none | piecifra |
 | [`shell`](plugins/shell) | A root shell on the TV, laid out like a terminal; one command at a time, `cd` remembered | `exec` | piecifra |
 | [`sonos-controller`](plugins/sonos-controller) | Remote volume and mute keys control a Sonos room through Vetro's MQTT rules; Sonos on your LAN, no cloud | none | genesai |
 | [`ssh-server`](plugins/ssh-server) | A real SSH-2 server in pure JS (no binary): `ssh` as a root line-shell, one-shot commands as root, `scp`/`sftp` as the owner. Needs Node 10+ | `exec` | bertrandom |
 | [`tv-reboot`](plugins/tv-reboot) | A button that restarts the TV; refuses while Samsung Home is disabled | `exec` | genesai |
 | [`tv-uptime`](plugins/tv-uptime) | How long the TV has been on | `exec` | andrearicci93 |
+| [`vpn`](plugins/vpn) | WireGuard VPN on the TV: NordVPN or your own configs (any provider or server); kill switch, split tunnel | `exec` | piecifra |
 | [`youtube`](plugins/youtube) | **Ad-free YouTube**: Samsung's own YouTube with ads blocked, Shorts hidden and sponsors skipped (TizenTube + SponsorBlock), nothing installed on the TV | `exec` | andrearicci93 |
 
 A Shard can also add **one card to the launcher's Control center** (`controlCenter` in the manifest, used by `home-assistant`; needs Vetro 0.7.0): a short list of rows
