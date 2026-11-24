@@ -27,7 +27,7 @@ never be supplied to PR jobs, a Shard test, or a `pull_request_target` workflow.
 
 ## What the maintainer checks
 
-- The code is readable: no minified or obfuscated source, no `eval` or `new Function`, no downloaded code.
+- The code is readable: no minified or obfuscated source, no `eval` or `new Function`, no downloaded code (the one exception is a large helper, see below).
 - It talks only to what the description says. No network calls to hosts the description does not mention, no
   collection of data about the user, the TV or the network.
 - `permissions` is as small as possible. A Shard that asks for `exec` must say in its README which commands it
@@ -39,6 +39,24 @@ never be supplied to PR jobs, a Shard test, or a `pull_request_target` workflow.
   press on a remote must not open a door or disarm an alarm. Neither method throws on a missing config or an unreachable service: it
   resolves or rejects with a short message the user can read (`Token refused`). `npm run test:runtime` calls both with an empty config.
 - The `author` is a real GitHub account that can answer questions about the Shard.
+
+## A helper too big for the bundle
+
+A bundle is at most 512 KB and text only. A small helper goes inside it as text (`eightbitdo-guide`: a `.gz.b64` file
+whose SHA-256 CI checks). A compiled helper too big for that, such as the `nordtv` Go program of `vpn`, may instead
+live in `helpers/` of this repository and be downloaded by the TV from
+`https://raw.githubusercontent.com/andrearicci93/vetro-plugins/main/helpers/`, and only from there. It is the only
+code a Shard may download, and only if all of this holds:
+
+- the source is in the pull request, and CI rebuilds the helper from it byte for byte with a pinned toolchain
+  (`scripts/check-helpers.sh`, job `helpers`). The check must fail when the file in `helpers/` is not what the source builds to;
+- the Shard pins the SHA-256 of the downloaded file in its code, checks it before it runs or unpacks anything, and
+  refuses to run it on a mismatch. Never a version "latest", never another host or a release of the author;
+- the README states both hashes (the file and the program inside it) and what the helper does as root;
+- the file has a new name for every change (`nordtv-1.1.2.gz`), so a Shard version always points to the file it was reviewed with.
+
+The helper gets the same review as the rest of the code: no obfuscation, no host the description does not mention, no
+data collected.
 
 This is a spot check by one person, not an audit.
 
