@@ -61,8 +61,25 @@ label { display: block; }
 .meter .fill { position: absolute; inset: 0 auto 0 0; width: 0; border-radius: 999px; background: linear-gradient(90deg, var(--action), var(--accent)); transition: width .18s ease; }
 .meter.is-muted .fill { background: var(--control); }
 .meter .cap { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--warn); display: none; }
+/* The bar can be dragged: a native range input lies on top of it, invisible, with a 20px thumb; the knob and
+   the fill follow the same geometry (the thumb's centre runs from 10px to the width minus 10px). */
+.meterwrap { position: relative; padding: 8px 0; }
+.meterwrap input[type=range] { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; -webkit-appearance: none; appearance: none; background: transparent; }
+.meterwrap input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; }
+.meterwrap input[type=range]::-moz-range-thumb { width: 20px; height: 20px; border: 0; }
+.meterwrap input[type=range]:disabled { cursor: default; }
+.meterwrap .knob { position: absolute; top: 50%; left: 10px; width: 20px; height: 20px; border-radius: 50%; background: var(--text); box-shadow: 0 1px 4px rgba(0, 0, 0, .45); transform: translate(-50%, -50%); pointer-events: none; transition: left .18s ease; }
+.meterwrap input[type=range]:focus-visible ~ .knob { outline: 2px solid var(--focus); outline-offset: 2px; }
+.meterwrap input[type=range]:disabled ~ .knob { display: none; }
+.meterwrap.dragging .knob, .meterwrap.dragging .fill { transition: none; }
 .keys { display: grid; grid-template-columns: 1fr 1.3fr 1fr; gap: 10px; }
 .keys button { padding: 14px 0; font-size: 1.15rem; border-radius: 12px; }
+.members { display: grid; gap: 8px; padding-top: 10px; border-top: 1px solid var(--border); }
+.member { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) 3.2em; gap: 10px; align-items: center; }
+.member .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.member .num { text-align: right; font-variant-numeric: tabular-nums; }
+.member input[type=range] { width: 100%; accent-color: var(--accent); }
+.member.is-muted .num { color: var(--warn); }
 .keys .mute { font-size: 1rem; }
 .lastcmd { min-height: 1.5em; }
 
@@ -103,7 +120,7 @@ th { color: var(--muted); font-weight: 500; }
 details summary { cursor: pointer; font-weight: 600; }
 details[open] summary { margin-bottom: 12px; }
 @media (max-width: 420px) { .number { font-size: 2.8rem; } .keys button { padding: 12px 0; } }
-@media (prefers-reduced-motion: reduce) { .meter .fill { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .meter .fill, .meterwrap .knob { transition: none; } }
 </style>
 </head>
 <body>
@@ -127,14 +144,23 @@ details[open] summary { margin-bottom: 12px; }
         <span class="number" id="volNumber">–</span>
         <span class="badge" id="muteBadge" hidden>Muted</span>
       </div>
-      <div class="meter" id="meter" role="meter" aria-valuemin="0" aria-valuemax="100" aria-label="Sonos volume">
-        <div class="fill" id="meterFill"></div>
-        <div class="cap" id="meterCap" title="Maximum volume"></div>
+      <div class="meterwrap" id="meterWrap">
+        <div class="meter" id="meter" aria-hidden="true">
+          <div class="fill" id="meterFill"></div>
+          <div class="cap" id="meterCap" title="Maximum volume"></div>
+        </div>
+        <input type="range" id="volSlider" min="0" max="100" step="1" aria-label="Sonos volume">
+        <div class="knob" id="meterKnob"></div>
       </div>
       <div class="keys">
         <button type="button" data-action="volume-down" aria-label="Volume down">−</button>
         <button type="button" data-action="mute-toggle" class="mute" id="muteBtn">Mute</button>
         <button type="button" data-action="volume-up" aria-label="Volume up">+</button>
+      </div>
+      <div class="members" id="groupBox" hidden>
+        <div class="muted small" id="groupTitle">Each room in the group</div>
+        <div id="groupList"></div>
+        <div class="msg" id="groupMsg"></div>
       </div>
       <div class="muted small lastcmd" id="lastCmd"></div>
       <div class="muted small" id="remoteLine">No key presses from Vetro yet.</div>
@@ -142,7 +168,7 @@ details[open] summary { margin-bottom: 12px; }
 
     <section class="card" aria-labelledby="spkTitle">
       <h2 id="spkTitle">Speaker</h2>
-      <p class="muted small">The room the remote controls. Search the network, or type the IP address of any Sonos speaker (the Sonos app shows it under Settings › System › About my system). Only speakers on your home network are used: addresses like 192.168.x.x, 10.x.x.x or 172.16.x.x to 172.31.x.x.</p>
+      <p class="muted small">The room the remote controls. Search the network, or type the IP address of any Sonos speaker (the Sonos app shows it under Settings › System › About my system). Only speakers on your home network are used: addresses like 192.168.x.x, 10.x.x.x or 172.16.x.x to 172.31.x.x, on port 1400 (type the address without a port).</p>
       <div class="msg bad" id="spkProblem" hidden></div>
       <div class="row">
         <button type="button" id="searchBtn">Search the network</button>
@@ -204,6 +230,11 @@ details[open] summary { margin-bottom: 12px; }
       <p class="muted small">If a key press reaches Vetro while this Shard is off, Vetro gives the keys back to the TV for a minute, then tries again.</p>
     </section>
 
+    <section class="card" aria-labelledby="ccTitle">
+      <h2 id="ccTitle">Control center</h2>
+      <p class="muted small">With Vetro 0.7.0’s launcher, a <b>Sonos</b> card can sit in the Control center (Down on the apps row): every room with its volume, a filled circle on the rooms that play the TV sound, and OK on a room to add it or take it out. Turn it on in Vetro UI → Launcher → Control center. Before a room is chosen here, the card can choose it: OK on <i>Search for speakers</i>, then OK on the TV’s room.</p>
+    </section>
+
     <section class="card" aria-labelledby="logTitle">
       <h2 id="logTitle">Activity</h2>
       <ul class="log" id="log"></ul>
@@ -230,6 +261,7 @@ details[open] summary { margin-bottom: 12px; }
   // Relative URLs only: the page's URL carries the session token Vetro checks.
   var $ = function (id) { return document.getElementById(id); };
   var last = null, rooms = [], busy = false, editing = {}, lastLogKey = null, lastRoomsKey = null;
+  var lastGroupKey = null, groupRows = {}, dragging = {};
 
   function request(sub, body) {
     var opts = body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(body) };
@@ -259,13 +291,12 @@ details[open] summary { margin-bottom: 12px; }
 
     $('roomName').textContent = hasSpeaker ? set.speaker.name + (set.target === 'group' ? ' and its group' : '') + ' · ' + set.speaker.address : 'Choose a speaker first.';
     var v = typeof sp.volume === 'number' ? sp.volume : null;
-    $('volNumber').textContent = v === null ? '–' : String(v);
-    $('meterFill').style.width = (v === null ? 0 : v) + '%';
-    $('meter').setAttribute('aria-valuenow', v === null ? '' : String(v));
+    $('volSlider').disabled = !hasSpeaker || v === null;
+    if (!dragging.main) { showLevel(v); $('volSlider').value = v === null ? '0' : String(v); }
     $('meter').className = 'meter' + (sp.muted ? ' is-muted' : '');
     var cap = $('meterCap');
     cap.style.display = set.maxVolume < 100 ? 'block' : 'none';
-    cap.style.left = 'calc(' + set.maxVolume + '% - 1px)';
+    cap.style.left = 'calc(' + at(set.maxVolume) + ' - 1px)';
     $('muteBadge').hidden = !sp.muted;
     $('muteBadge').className = 'badge' + (sp.muted ? ' muted-on' : '');
     $('muteBtn').textContent = sp.muted ? 'Unmute' : 'Mute';
@@ -308,6 +339,56 @@ details[open] summary { margin-bottom: 12px; }
     var logKey = (s.log || []).map(function (e) { return e.at + e.text; }).join('|');
     if (logKey !== lastLogKey) renderLog(s.log || [], logKey);
     renderRooms();
+    renderGroup(sp.group || []);
+  }
+
+  // Where volume v sits on the big bar: the centre of the range input's thumb (see .meterwrap in the CSS).
+  function at(v) { return 'calc(10px + (100% - 20px) * ' + (v / 100) + ')'; }
+  function showLevel(v) {
+    $('volNumber').textContent = v === null ? '–' : String(v);
+    $('meterFill').style.width = v === null ? '0' : at(v);
+    $('meterKnob').style.left = at(v === null ? 0 : v);
+  }
+
+  // One slider per room while the chosen room is grouped: each room's own volume. The rows are rebuilt only
+  // when the rooms change, and a slider being dragged is left alone by the 2-second refresh.
+  function renderGroup(list) {
+    $('groupBox').hidden = list.length < 2;
+    var key = list.map(function (r) { return r.uuid + '\n' + r.name; }).join('|');
+    if (key !== lastGroupKey) {
+      lastGroupKey = key;
+      groupRows = {};
+      $('groupList').innerHTML = '';
+      list.forEach(function (r) {
+        var row = document.createElement('div'), name = document.createElement('div');
+        var slider = document.createElement('input'), num = document.createElement('span');
+        row.className = 'member'; name.className = 'name'; num.className = 'num';
+        name.textContent = r.name;
+        slider.type = 'range'; slider.min = '0'; slider.max = '100'; slider.step = '1';
+        slider.setAttribute('aria-label', 'Volume in ' + r.name);
+        slider.addEventListener('input', function () { dragging[r.uuid] = true; num.textContent = this.value; });
+        slider.addEventListener('change', function () {
+          dragging[r.uuid] = true;
+          msg('groupMsg', '');
+          request('room-volume', { uuid: r.uuid, volume: Number(this.value) })
+            .then(function (s) { dragging[r.uuid] = false; render(s); },
+              function (e) { dragging[r.uuid] = false; msg('groupMsg', e.message, 'bad'); load(); });
+        });
+        row.appendChild(name); row.appendChild(slider); row.appendChild(num);
+        $('groupList').appendChild(row);
+        groupRows[r.uuid] = { row: row, slider: slider, num: num };
+      });
+    }
+    list.forEach(function (r) {
+      var el = groupRows[r.uuid];
+      if (!el || dragging[r.uuid]) return;
+      var known = typeof r.volume === 'number';
+      el.slider.value = known ? String(r.volume) : '0';
+      el.slider.disabled = !known;
+      el.num.textContent = !known || r.muted ? '–' : String(r.volume);   // a dash when muted, as on the TV's card
+      el.row.className = 'member' + (r.muted ? ' is-muted' : '');
+      el.slider.title = r.muted ? r.name + ' is muted' + (last && last.settings.unmuteOnVolume ? ': moving the slider unmutes it' : '') : '';
+    });
   }
 
   var lastCheckAt = null;
@@ -402,6 +483,21 @@ details[open] summary { margin-bottom: 12px; }
       request('command', { action: b.getAttribute('data-action') }).then(load, function (e) { $('lastCmd').textContent = e.message; load(); })
         .then(function () { busy = false; });
     });
+  });
+  // Dragging the big bar: the number, fill and knob follow at once (not past the maximum volume); letting go
+  // sets the volume of the room or group, like the keys.
+  $('volSlider').addEventListener('input', function () {
+    var max = last ? last.settings.maxVolume : 100;
+    if (Number(this.value) > max) this.value = String(max);
+    dragging.main = true;
+    $('meterWrap').className = 'meterwrap dragging';
+    showLevel(Number(this.value));
+  });
+  $('volSlider').addEventListener('change', function () {
+    var done = function () { dragging.main = false; $('meterWrap').className = 'meterwrap'; return load(); };
+    dragging.main = true;
+    request('command', { action: 'set-volume', volume: Number(this.value) })
+      .then(done, function (e) { $('lastCmd').textContent = e.message; return done(); });
   });
   $('checkBtn').addEventListener('click', function () {
     $('checkBtn').disabled = true; $('checkInfo').textContent = 'Checking…';
