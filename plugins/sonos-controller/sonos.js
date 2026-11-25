@@ -27,8 +27,10 @@ var MAX_NAME = 64;            // longest room name the Shard keeps (index.js che
 var SERVICES = {
     rendering: { path: '/MediaRenderer/RenderingControl/Control', urn: 'urn:schemas-upnp-org:service:RenderingControl:1' },
     group: { path: '/MediaRenderer/GroupRenderingControl/Control', urn: 'urn:schemas-upnp-org:service:GroupRenderingControl:1' },
-    topology: { path: '/ZoneGroupTopology/Control', urn: 'urn:schemas-upnp-org:service:ZoneGroupTopology:1' }
+    topology: { path: '/ZoneGroupTopology/Control', urn: 'urn:schemas-upnp-org:service:ZoneGroupTopology:1' },
+    transport: { path: '/MediaRenderer/AVTransport/Control', urn: 'urn:schemas-upnp-org:service:AVTransport:1' }
 };
+var PLAYER_ID_RE = /^RINCON_[A-Za-z0-9]{1,40}$/;   // a Sonos player's id, as the topology lists it
 
 var ADDRESS_RE = /^([^:\s]+)(?::(\d{1,5}))?$/;
 var IPV4_RE = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/;
@@ -44,7 +46,10 @@ var LOCATION_RE = /^https?:\/\/([^\/:]+)(?::(\d+))?/;
 //     resolves to another machine would get around the check below. No leading zeros either: some
 //     systems read "010.0.0.1" as octal, and "0177.0.0.1" is 127.0.0.1;
 //   - in a private IPv4 range (RFC 1918): 10.0.0.0/8, 172.16.0.0/12 or 192.168.0.0/16, which is where a
-//     home router gives out addresses.
+//     home router gives out addresses;
+//   - on port 1400, the only port a Sonos player answers on (fixed in its firmware). A bare address means
+//     port 1400; any other port is refused, so neither a speaker's topology nor a network-search answer
+//     can point the Shard at another service on a home-network machine.
 //
 // Everything else is refused, with a message for the settings page. In particular:
 //
@@ -78,9 +83,8 @@ function rangeProblem(o) {
     return 'not-local';
 }
 
-// Throws when host may not be used as a speaker. testHosts: exact addresses the tests also allow (their
-// simulated speakers listen on 127.0.0.1); only index.js's createWithTestHosts passes it, Vetro never does.
-function checkHost(host, text, testHosts) {
+// Throws when host may not be used as a speaker.
+function checkHost(host, text) {
     var m = IPV4_RE.exec(host);
     if (!m) {
         if (host.toLowerCase() === 'localhost') throw refuse(text, 'is the TV itself, not a speaker');
@@ -98,7 +102,6 @@ function checkHost(host, text, testHosts) {
         if (n > 255) throw new Error('Not a speaker address: ' + text + '. Each number must be 0 to 255');
         octets.push(n);
     }
-    if (testHosts && testHosts.indexOf(host) >= 0) return;
     switch (rangeProblem(octets)) {
         case null: return;
         case 'loopback': throw refuse(text, 'is the TV itself, not a speaker');
@@ -110,16 +113,18 @@ function checkHost(host, text, testHosts) {
     }
 }
 
-// "192.168.1.3" or "192.168.1.3:1400" -> { host, port }. Throws on anything else, including addresses
-// outside the home network (see above); the error's message is meant for the settings page.
-function parseAddress(text, testHosts) {
+// "192.168.1.3" or "192.168.1.3:1400" -> { host, port: 1400 }. Throws on anything else, including another
+// port and addresses outside the home network (see above); the error's message is meant for the settings page.
+function parseAddress(text) {
     var shown = String(text == null ? '' : text).trim();
     var m = ADDRESS_RE.exec(shown);
     if (!m) throw new Error('Not a speaker address: ' + (shown || '(empty)') + '. Type the IP address of a Sonos speaker, like 192.168.1.20');
-    var port = m[2] ? Number(m[2]) : DEFAULT_PORT;
-    if (port < 1 || port > 65535) throw new Error('Not a speaker address: ' + shown + '. The port must be 1 to 65535');
-    checkHost(m[1], shown, testHosts);
-    return { host: m[1], port: port };
+    checkHost(m[1], shown);
+    if (m[2] && Number(m[2]) !== DEFAULT_PORT) {
+        throw refuse(shown, 'uses port ' + Number(m[2]) + ', not 1400',
+            'Sonos speakers always answer on port 1400: type the address without a port, like 192.168.1.20');
+    }
+    return { host: m[1], port: DEFAULT_PORT };
 }
 
 function formatAddress(a) {
@@ -235,11 +240,12 @@ var MASTER = [['InstanceID', '0'], ['Channel', 'Master']];
 var INSTANCE = [['InstanceID', '0']];
 
 // mode 'room': RenderingControl on the room's player. mode 'group': GroupRenderingControl on the coordinator.
-function getVolume(address, mode) {
+// timeoutMs (optional): a shorter limit than TIMEOUT_MS, for the Control center card.
+function getVolume(address, mode, timeoutMs) {
     if (mode === 'group') {
-        return call(address, 'group', 'GetGroupVolume', INSTANCE).then(function (t) { return readInt(t, 'CurrentVolume', 'GetGroupVolume'); });
+        return call(address, 'group', 'GetGroupVolume', INSTANCE, timeoutMs).then(function (t) { return readInt(t, 'CurrentVolume', 'GetGroupVolume'); });
     }
-    return call(address, 'rendering', 'GetVolume', MASTER).then(function (t) { return readInt(t, 'CurrentVolume', 'GetVolume'); });
+    return call(address, 'rendering', 'GetVolume', MASTER, timeoutMs).then(function (t) { return readInt(t, 'CurrentVolume', 'GetVolume'); });
 }
 
 function setVolume(address, mode, volume) {
@@ -253,17 +259,38 @@ function setVolume(address, mode, volume) {
     return call(address, 'rendering', 'SetVolume', MASTER.concat([['DesiredVolume', v]])).then(function () { return Number(v); });
 }
 
-function getMute(address, mode) {
+function getMute(address, mode, timeoutMs) {
     if (mode === 'group') {
-        return call(address, 'group', 'GetGroupMute', INSTANCE).then(function (t) { return readInt(t, 'CurrentMute', 'GetGroupMute') === 1; });
+        return call(address, 'group', 'GetGroupMute', INSTANCE, timeoutMs).then(function (t) { return readInt(t, 'CurrentMute', 'GetGroupMute') === 1; });
     }
-    return call(address, 'rendering', 'GetMute', MASTER).then(function (t) { return readInt(t, 'CurrentMute', 'GetMute') === 1; });
+    return call(address, 'rendering', 'GetMute', MASTER, timeoutMs).then(function (t) { return readInt(t, 'CurrentMute', 'GetMute') === 1; });
 }
 
 function setMute(address, mode, muted) {
     var v = muted ? '1' : '0';
     if (mode === 'group') return call(address, 'group', 'SetGroupMute', INSTANCE.concat([['DesiredMute', v]])).then(function () { return !!muted; });
     return call(address, 'rendering', 'SetMute', MASTER.concat([['DesiredMute', v]])).then(function () { return !!muted; });
+}
+
+// ---- Grouping (AVTransport on the room's own player) ---------------------------------------------------
+//
+// The rooms of a Sonos group all play what the group's coordinator plays. The Control center card uses this
+// to let more rooms play the TV sound: the TV speaker (a Playbar, say) is the coordinator of its group, and a
+// room joins that group or leaves it.
+
+// The room at address joins the group led by the player coordinatorId (it then plays what that group
+// plays, and stops what it played before). The URI "x-rincon:<id>" is how Sonos names "follow this player".
+function joinGroup(address, coordinatorId, timeoutMs) {
+    if (typeof coordinatorId !== 'string' || !PLAYER_ID_RE.test(coordinatorId)) {
+        return Promise.reject(new Error('Not a Sonos player id: ' + coordinatorId));
+    }
+    return call(address, 'transport', 'SetAVTransportURI',
+        INSTANCE.concat([['CurrentURI', 'x-rincon:' + coordinatorId], ['CurrentURIMetaData', '']]), timeoutMs).then(function () { return true; });
+}
+
+// The room at address leaves its group and plays on its own (silent until something is played there).
+function leaveGroup(address, timeoutMs) {
+    return call(address, 'transport', 'BecomeCoordinatorOfStandaloneGroup', INSTANCE, timeoutMs).then(function () { return true; });
 }
 
 function attributes(text) {
@@ -279,7 +306,7 @@ function attributes(text) {
 // (surrounds, Sub) are separate <Satellite> elements and never listed as rooms.
 // A room whose Location is not a home-network address (see parseAddress) is not used: it goes to
 // rejected as { uuid, name, address, why, error } so the page can say why it is missing.
-function parseTopology(responseXml, testHosts) {
+function parseTopology(responseXml) {
     var state = tagValue(responseXml, 'ZoneGroupState');
     if (state === null) throw new Error('Unexpected answer to GetZoneGroupState');
     var xml = unescapeXml(state);
@@ -297,7 +324,7 @@ function parseTopology(responseXml, testHosts) {
             if (!loc) continue;
             var text = loc[1] + (loc[2] ? ':' + loc[2] : ''), address;
             try {
-                address = parseAddress(text, testHosts);
+                address = parseAddress(text);
             } catch (e) {
                 rejected.push({ uuid: a.UUID, name: name, address: text, why: e.why || 'is not a speaker address', error: e.message });
                 continue;
@@ -321,9 +348,9 @@ function parseTopology(responseXml, testHosts) {
     return { groups: groups, rooms: rooms, rejected: rejected };
 }
 
-function getTopology(address, timeoutMs, testHosts) {
+function getTopology(address, timeoutMs) {
     return call(address, 'topology', 'GetZoneGroupState', [], timeoutMs).then(function (xml) {
-        return parseTopology(xml, testHosts);
+        return parseTopology(xml);
     });
 }
 
@@ -339,5 +366,7 @@ module.exports = {
     setVolume: setVolume,
     getMute: getMute,
     setMute: setMute,
+    joinGroup: joinGroup,
+    leaveGroup: leaveGroup,
     call: call
 };

@@ -25,14 +25,13 @@ var SONOS_RE = /sonos|ZonePlayer/i;
 
 // One answer to the search -> null (not a Sonos player, or no LOCATION), { address: { host, port } } or,
 // when LOCATION is not a home-network address, { rejected: { address, why, error } }.
-// testHosts: see sonos.parseAddress (tests only).
-function parseResponse(text, testHosts) {
+function parseResponse(text) {
     if (!SONOS_RE.test(text)) return null;
     var m = LOCATION_RE.exec(text);
     if (!m) return null;
     var shown = m[1] + (m[2] ? ':' + m[2] : '');
     try {
-        return { address: sonos.parseAddress(shown, testHosts) };
+        return { address: sonos.parseAddress(shown) };
     } catch (e) {
         return { rejected: { address: shown, why: e.why || 'is not a speaker address', error: e.message } };
     }
@@ -41,7 +40,7 @@ function parseResponse(text, testHosts) {
 // Returns { promise, cancel }. The promise resolves to { found: [{ host, port }], rejected: [{ address,
 // why, error }] } (either possibly empty) after windowMs, or earlier with what was found if cancel() is
 // called. It never rejects.
-function search(windowMs, testHosts) {
+function search(windowMs) {
     var found = [], rejected = [], seen = {}, socket = null, timer = null, resent = null, done = false, finish;
     var promise = new Promise(function (resolve) {
         finish = function () {
@@ -68,7 +67,7 @@ function search(windowMs, testHosts) {
     }
     socket.on('error', function () { finish(); });
     socket.on('message', function (msg) {
-        var answer = parseResponse(msg.toString('utf8'), testHosts);
+        var answer = parseResponse(msg.toString('utf8'));
         if (!answer) return;
         var key = answer.address ? sonos.formatAddress(answer.address) : answer.rejected.address;
         if (seen[key]) return;
