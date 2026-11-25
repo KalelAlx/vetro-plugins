@@ -157,6 +157,19 @@
       "size": 2885
     },
     {
+      "id": "usb-ethernet",
+      "name": "USB Ethernet",
+      "version": "1.1.0",
+      "author": "andrearicci93",
+      "description": "Gives a USB Ethernet adapter (Realtek RTL8152/8153/8156 and branded ones) a driver and makes it the TV's wired connection after each restart. No network use.",
+      "permissions": [
+        "exec"
+      ],
+      "url": "dist/usb-ethernet-1.1.0.vplugin",
+      "sha256": "7563007c1d3a21a4579a73639f0776864d6f9affce3fcb2a81ff48634a91045c",
+      "size": 37774
+    },
+    {
       "id": "vpn",
       "name": "VPN",
       "version": "1.1.1",

@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>USB Ethernet</title>
+<style>
+body { font: 16px/1.45 system-ui, sans-serif; margin: 24px; max-width: 42em; }
+h2 { margin: 0 0 12px; font-size: 1.5rem; line-height: 1.2; }
+h3 { margin: 28px 0 6px; font-size: 1.1rem; }
+dt { font-weight: 600; margin-top: 10px; }
+dd { margin: 2px 0 0; }
+p, .small { margin: 8px 0; }
+.small { font-size: 14px; opacity: .8; }
+pre, textarea { box-sizing: border-box; width: 100%; white-space: pre-wrap; font: 13px ui-monospace, monospace; padding: 12px; border: 1px solid #8884; border-radius: 8px; background: transparent; color: inherit; }
+textarea { height: 18em; resize: vertical; }
+input[type=text] { font: inherit; padding: 6px 8px; width: 18em; max-width: 100%; border: 1px solid #8886; border-radius: 6px; background: transparent; color: inherit; }
+button { font: inherit; padding: 8px 16px; margin: 0 8px 8px 0; }
+.bad { color: #c0392b; }
+</style>
+</head>
+<body>
+<h2>USB Ethernet</h2>
+<dl id="s"><dd>Reading…</dd></dl>
+<p><button id="b">Show the last setup</button></p>
+<pre id="log" hidden></pre>
+
+<h3>Report</h3>
+<p class="small">If your adapter does not work, a report tells us what this TV offers: its USB devices, network interfaces, drivers, and the last setup log. It holds no serial numbers, MAC addresses, IP addresses or host name, and nothing is sent anywhere: you read it here, then save it or copy it and post it where you ask for help.</p>
+<p><label for="model">Your TV&rsquo;s model (printed on the back, like UE50AU7000), added to the report:</label><br><input type="text" id="model" maxlength="40" autocomplete="off"></p>
+<p><button id="make">Make the report</button></p>
+<p class="small bad" id="reportMsg"></p>
+<div id="reportBox" hidden>
+  <textarea id="report" readonly spellcheck="false" aria-label="Report"></textarea>
+  <p><button id="save">Save as a file</button><button id="copy">Copy</button></p>
+  <p class="small">If saving does nothing (the dashboard may block downloads), use Copy, or select the text above.</p>
+</div>
+
+<script>
+var WORDS = {
+  starting: 'Waiting for the TV',
+  checking: 'Checking the result',
+  none: 'No supported USB Ethernet adapter plugged in',
+  bind: 'Adapter found, not set up yet',
+  swap: 'Adapter set up, waiting to become the wired connection',
+  'no-cable': 'Adapter ready: plug a network cable into it',
+  'builtin-unknown': 'Not used: the TV could not say whether its own Ethernet port has a cable',
+  'builtin-cable': 'Not used: the TV’s own Ethernet port has a cable',
+  'in-place': 'The adapter is the TV’s wired connection',
+  applying: 'Setting up (the network drops for a few seconds)',
+  reverted: 'The TV got no address from the adapter, so the old settings were put back. Restart the TV to try again',
+  'gave-up': 'Stopped after 3 tries: restart the TV to try again'
+};
+var RESULTS = {
+  'done': 'done',
+  'no-driver': 'no driver on this TV can drive this adapter (make a report)',
+  'no-address': 'set up, but no address yet',
+  'reverted': 'the old settings were put back',
+  'rename-failed': 'the TV refused to rename the network interfaces',
+  'no-cable': 'waiting for a cable',
+  'nothing-to-do': 'nothing to do',
+  'builtin-cable': 'the TV’s own port has a cable',
+  'busy': 'another setup was running'
+};
+function $(id) { return document.getElementById(id); }
+function row(k, v) { return '<dt>' + k + '</dt><dd>' + v + '</dd>'; }
+function yn(v) { return v === true ? 'yes' : v === false ? 'no' : '—'; }
+function esc(t) { return String(t).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+function show(d) {
+  var html = row('State', esc(WORDS[d.state] || d.state));
+  html += row('Adapter', d.adapter ? esc(d.adapter) + (d.driver ? ' (driver ' + esc(d.driver) + ')' : '') : '—');
+  html += row('Interface', esc(d.iface || '—')) + row('Cable connected', yn(d.carrier)) + row('Has an address', yn(d.address));
+  html += row('Last setup', d.result ? esc(RESULTS[d.result] || d.result) + ' (' + new Date(d.resultAt).toLocaleTimeString() + ')' : 'not run since Vetro started');
+  if (d.error) html += row('Error', esc(d.error));
+  $('s').innerHTML = html;
+}
+function get() { fetch('state').then(function (r) { return r.json(); }).then(show).catch(function () {}); }
+$('b').onclick = function () {
+  fetch('log').then(function (r) { return r.json(); }).then(function (d) {
+    var p = $('log'); p.hidden = false; p.textContent = d.log || d.error || 'No setup yet since the TV started';
+  }).catch(function () {});
+};
+
+var made = '';
+function modelLine() {
+  var m = $('model').value.replace(/[^A-Za-z0-9 ._\/-]/g, '').slice(0, 40);
+  return m ? 'TV model (typed by the user): ' + m + '\n' : '';
+}
+$('make').onclick = function () {
+  var btn = $('make');
+  btn.disabled = true; $('reportMsg').textContent = 'Reading the TV…';
+  fetch('report').then(function (r) { return r.json(); }).then(function (d) {
+    btn.disabled = false;
+    if (!d.text) { $('reportMsg').textContent = d.error || 'No report'; return; }
+    $('reportMsg').textContent = '';
+    made = d.text;
+    $('report').value = modelLine() + made;
+    $('reportBox').hidden = false;
+  }).catch(function (e) { btn.disabled = false; $('reportMsg').textContent = 'Could not make the report: ' + e.message; });
+};
+$('model').oninput = function () { if (made) $('report').value = modelLine() + made; };
+$('save').onclick = function () {
+  var text = $('report').value;
+  var name = 'usb-ethernet-report' + ($('model').value.replace(/[^A-Za-z0-9._-]/g, '') ? '-' + $('model').value.replace(/[^A-Za-z0-9._-]/g, '') : '') + '.txt';
+  try {
+    var url = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+    var a = document.createElement('a');
+    a.href = url; a.download = name; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+  } catch (e) { $('reportMsg').textContent = 'Saving is blocked here: use Copy.'; }
+};
+$('copy').onclick = function () {
+  var t = $('report'); t.focus(); t.select();
+  var ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+  $('reportMsg').textContent = ok ? '' : 'Copying is blocked here: the text is selected, press Ctrl+C.';
+};
+get(); setInterval(get, 3000);
+</script>
+</body>
+</html>
