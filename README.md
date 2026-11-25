@@ -19,6 +19,7 @@ dashboard shows under **Vetro Shards → Load plugin catalog**, the source of ev
 | [`ssh-server`](plugins/ssh-server) | A real SSH-2 server in pure JS (no binary): `ssh` as a root line-shell, one-shot commands as root, `scp`/`sftp` as the owner. Needs Node 10+ | `exec` | bertrandom |
 | [`tv-reboot`](plugins/tv-reboot) | A button that restarts the TV; refuses while Samsung Home is disabled | `exec` | genesai |
 | [`tv-uptime`](plugins/tv-uptime) | How long the TV has been on | `exec` | andrearicci93 |
+| [`usb-ethernet`](plugins/usb-ethernet) | A USB Ethernet adapter (Realtek RTL8152/8153/8156 and branded ones) as the TV's wired connection after every restart; a page makes a report to widen support | `exec` | andrearicci93 |
 | [`vpn`](plugins/vpn) | WireGuard VPN on the TV: NordVPN or your own configs (any provider or server); kill switch, split tunnel | `exec` | piecifra |
 | [`youtube`](plugins/youtube) | **Ad-free YouTube**: Samsung's own YouTube with ads blocked, Shorts hidden and sponsors skipped (TizenTube + SponsorBlock), nothing installed on the TV | `exec` | andrearicci93 |
 
