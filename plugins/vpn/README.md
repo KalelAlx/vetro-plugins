@@ -20,28 +20,40 @@ A profile's `AllowedIPs` decides what goes through the VPN:
 - `0.0.0.0/0` (or `0.0.0.0/1, 128.0.0.0/1`, or no `AllowedIPs` line): **everything**. DNS is forced to the
   profile's `DNS` server, or to Quad9 (9.9.9.9) through the tunnel if it has none, and the kill switch applies.
 - Anything narrower, for example `10.8.0.0/24` (split): **only those addresses** go through the VPN, the rest uses
-  your normal connection. DNS is redirected only when the profile names a server, and the kill switch is not used
-  (it would cut the internet the profile leaves outside on purpose).
+  your normal connection. DNS is redirected only when the profile names a server, and only while the tunnel
+  answers: from its first handshake on, and not after 3 minutes without an answer (back again when it answers), so
+  a server that does not answer never takes the whole TV's DNS with it. The kill switch is not used (it would cut
+  the internet the profile leaves outside on purpose).
 
 Either way the home network (LAN) stays reachable, Vetro included: its own route always wins over the tunnel.
 
 Limits: IPv4 only (IPv6 addresses, DNS servers and `AllowedIPs` in a config are skipped, and IPv6 is blocked while
 the VPN is on; a server reachable only over IPv6 is refused), and one `[Peer]` per config. `PresharedKey`, `MTU`,
-`PersistentKeepalive` and a host-name `Endpoint` are supported (next section for when its address changes).
+`PersistentKeepalive` and a host-name `Endpoint` are supported (next section for when its address changes). With
+`PersistentKeepalive = 0` (or none), `nordtv` still sends keepalives until the first handshake, then stops.
 
 ## When the connection stops working
 
-`nordtv` watches the WireGuard handshake, which a working tunnel renews every 2 minutes:
+`nordtv` watches the WireGuard handshake, which a working tunnel renews every 2 minutes while it sends. The tunnel
+counts as **stalled** when something was sent and no session answered it; the times below count from then. An
+idle tunnel is never stalled: with `PersistentKeepalive = 0` nothing is sent while nothing is used, and `nordtv`
+does not restart it. (When something is sent and gets no answer, it sends keepalives again until the tunnel
+answers, so a server coming back, or one that stays away, is seen.)
 
-- **5 minutes without one:** it sets the server's endpoint again. A host-name `Endpoint` (a dynamic-DNS name) is
+- **3 minutes stalled, split profile with `DNS`:** the DNS redirect is removed until the tunnel answers again.
+- **5 minutes stalled:** it sets the server's endpoint again. A host-name `Endpoint` (a dynamic-DNS name) is
   looked up again first, and the tunnel follows a new address. That lookup goes past the dead tunnel: it asks the
   TV's own DNS servers (`/etc/resolv.conf`) from a socket outside the tunnel, and for the second or so it takes, the
   DNS redirect and the kill switch let through only that socket's query to port 53. (The tested TV's kernel has no
   `iptables` `mark` match, so the rules match the socket's port.) It is tried again every 5 minutes.
-- **15 minutes without one:** it stops, removing its rules, so that the next start connects from scratch: every
+- **15 minutes stalled:** it stops, removing its rules, so that the next start connects from scratch: every
   rule removed, the server looked up again, and for NordVPN a new server asked for. With **Keep connected** on,
-  the Shard does that within a minute or two. With it off, the VPN stays off and the tab shows why. During that
-  restart, as during any start, the kill switch is not in place yet.
+  the Shard does that within a minute or two. With it off, the VPN stays off and the tab shows why.
+- **The kill switch is off during each restart,** as during any start: from the moment the old rules are removed
+  until the new tunnel is set up (the API call, and the server's DNS lookup), a few seconds, at most about 40.
+  So that a server that keeps not answering does not open that gap every 15 minutes, each restart in a row waits
+  longer before giving up: 15 minutes, then 30, then 60 from there on. The first answer, or switching the VPN off
+  or on, starts again from 15.
 
 **Your own server at home:** a config whose `Endpoint` is your public address or a dynamic-DNS name (for example
 `me.synology.me`) only works from inside your home if the router loops that traffic back (hairpin NAT). Many routers
@@ -56,10 +68,10 @@ This Shard replaces **NordVPN** (id `nordvpn` 1.0.0), which is no longer in the 
   VPN.
 - **Your settings are kept:** the token, country, kill switch, "VPN on" and "Keep connected" live in `/opt/nordtv`,
   not in the Shard, so VPN finds them and nothing has to be entered again. The first time, VPN replaces the old
-  program (nordtv 1.0.0) with 1.1.2 (see below). If that download fails (for example the Wi-Fi is not up yet),
+  program (nordtv 1.0.0) with 1.1.3 (see below). If that download fails (for example the Wi-Fi is not up yet),
   VPN keeps using 1.0.0, shows **Update pending** in the tab, and tries again every 2 minutes until it works.
 - **Going back:** switching NordVPN on again puts nordtv 1.0.0 back (it installs the program it pins), so the fixes
-  and the WireGuard profiles of 1.1 are gone until VPN installs 1.1.2 again.
+  and the WireGuard profiles of 1.1 are gone until VPN installs 1.1.3 again.
 - **The old kill switch and DNS rules are removed:** switching NordVPN off runs `nordtv down`, which deletes them.
   If something was left anyway (for example the old program had crashed), VPN removes it within a minute or two of
   starting, and `nordtv up` removes it before connecting (next section). To check by hand from the Shell Shard,
@@ -101,14 +113,15 @@ in Go on userspace [wireguard-go](https://git.zx2c4.com/wireguard-go). Its full 
 (also at [piecifra/nordtv](https://github.com/piecifra/nordtv)).
 
 - **Why it is not in the bundle:** the TV accepts bundles of text only, at most 512 KiB; the program is 3 MB
-  compressed. It is kept in this catalog instead, as [`helpers/nordtv-1.1.2.gz`](../../helpers), next to its source.
+  compressed. It is kept in this catalog instead, as [`helpers/nordtv-1.1.3.gz`](../../helpers), next to its source.
+  The file of an earlier build stays there for as long as a published version of this Shard pins it.
 - **Checked by CI:** on every pull request and push, the catalog's CI runs `go test` in `nordtv/`, builds it with
   the command below (Go 1.26.0, set up with `actions/setup-go`), and fails unless the result is byte for byte the
-  binary inside `helpers/nordtv-1.1.2.gz` and that file's SHA-256 is the one pinned in `index.js` and written here.
+  binary inside `helpers/nordtv-1.1.3.gz` and that file's SHA-256 is the one pinned in `index.js` and written here.
 - **Where the TV gets it:** if `/opt/nordtv/nordtv` is missing, or was installed from another build (for example
   1.0.0 by the NordVPN Shard), the Shard downloads
-  `https://raw.githubusercontent.com/andrearicci93/vetro-plugins/main/helpers/nordtv-1.1.2.gz` and installs it
-  **only if its SHA-256 is `b56117fb6d34fbb09f9d5acfaab76a256f67de9386f94c6c7fc8e0a32ecc57e4`**, pinned in
+  `https://raw.githubusercontent.com/andrearicci93/vetro-plugins/main/helpers/nordtv-1.1.3.gz` and installs it
+  **only if its SHA-256 is `8a14776732998247fe9f9bfcb061c637a257110e5c537ad39eeaab3a0f5a01e6`**, pinned in
   `index.js`. A file with any other hash is deleted and nothing is installed.
 - **Rebuild it yourself:** Go 1.26.0 (any Go 1.21 or later fetches it by itself through `GOTOOLCHAIN`), from
   `nordtv/`:
@@ -116,8 +129,8 @@ in Go on userspace [wireguard-go](https://git.zx2c4.com/wireguard-go). Its full 
   ```sh
   GOTOOLCHAIN=go1.26.0 CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 GOFLAGS=-mod=readonly \
     go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o /tmp/nordtv-armv7 .
-  shasum -a 256 /tmp/nordtv-armv7                       # df043b5876bd1b078dff04de65fb1fe80606e7c9381555e04ab3b198bc73d255
-  gzip -9 -n -c /tmp/nordtv-armv7 | shasum -a 256       # b56117fb6d34fbb09f9d5acfaab76a256f67de9386f94c6c7fc8e0a32ecc57e4
+  shasum -a 256 /tmp/nordtv-armv7                       # d76b31d08b6cc4796f7fb94d462aef374708b6318c91d6b5f9ad717a5bd167f9
+  gzip -9 -n -c /tmp/nordtv-armv7 | shasum -a 256       # 8a14776732998247fe9f9bfcb061c637a257110e5c537ad39eeaab3a0f5a01e6
   ```
 
   The first hash is the program itself. The second depends on the gzip in use as well (it was made with the one
@@ -141,15 +154,20 @@ All through `ctx.execute`, as root.
 | country list (NordVPN only) | `nordtv countries` | names for the country picker |
 | a setting changes | `nordtv set provider nordvpn\|wireguard` / `set profile NAME` / `set country CC` / `set killswitch on\|off` / `set autostart on\|off`, then `nordtv start` when the VPN is on | apply the setting; provider, profile, country and kill switch reconnect |
 | **VPN on** / **VPN off** | `nordtv start` / `nordtv stop` | `stop` also saves "VPN off" |
-| **Save and check token** | `base64 -d > /opt/nordtv/token.new`, `mv` to `/opt/nordtv/token`, `nordtv verify` | store the token (never in clear on a command line) and check it with NordVPN |
-| **Save profile** | `base64 -d \| nordtv profile add NAME` | `nordtv` checks the config and saves it as `/opt/nordtv/profiles/NAME.conf` (never in clear on a command line) |
+| **Save and check token** | `cat HANDOFF > /opt/nordtv/token.new`, `mv` to `/opt/nordtv/token`, `rm -f HANDOFF`, `nordtv verify` | store the token and check it with NordVPN |
+| **Save profile** | `nordtv profile add NAME < HANDOFF`, `rm -f HANDOFF` | `nordtv` checks the config and saves it as `/opt/nordtv/profiles/NAME.conf` |
 | **Remove** (a profile) | `nordtv profile remove NAME` | delete it; the profile in use while connected cannot be removed |
 | **Reset VPN** | `nordtv stop`, then `rm -f /opt/nordtv/token /opt/nordtv/token.new /opt/nordtv/config /opt/nordtv/log` and `rm -rf /opt/nordtv/profiles` | back to a fresh install; the binary and `.source` stay, so nothing is downloaded again |
 | every 60 s, only when "VPN on" and "Keep connected" are saved, the provider has what it needs (a token, or a valid chosen profile) and the tunnel is down and not connecting | `nordtv start` | reconnect after a restart or a drop; a failed start waits 2 minutes |
 | every 60 s, when it will not reconnect (VPN off, Keep connected off, or nothing to connect with) and the tunnel is down and not connecting | `iptables -n -L NORDTV`, `iptables -t nat -n -L NORDTV_DNS`, `ip6tables -n -L NORDTV`, `ip rule`; only if one of them shows nordtv's rules and no `nordtv up` is starting (`/proc/*/cmdline`): `nordtv down` | remove what a crashed `nordtv` left, so its kill switch cannot keep the TV offline |
 | the Shard is switched off | `nordtv down` | stop the VPN and remove everything it created, keeping "VPN on" saved so it comes back with the Shard |
 
-`NAME` is checked before use: letters, digits, `-` and `_`, up to 32. Inside `nordtv`, the commands that change the
+`NAME` is checked before use: letters, digits, `-` and `_`, up to 32. **The token and a profile's text are never on a
+command line.** Every command above reaches the root agent as `sh -c TEXT`, and any process on the TV can read
+that text in `/proc` while it runs (the base64 around it in VPN 1.1.0 only encoded it). So the Shard writes them to
+`HANDOFF`, a new file in its own folder (`handoff-` and 32 random hex digits, mode 600, created only if it does not
+exist), and the command reads and deletes it; the Shard deletes it again when the command returns, and removes any
+left by a crash when it starts. Inside `nordtv`, the commands that change the
 system are only `ip addr/link/route/rule`, `iptables` and `ip6tables` (next section). Nothing else on the TV is
 changed: no system DNS setting or file, only the redirect rules below.
 
@@ -234,6 +252,19 @@ scripts):
   binary and no temporary file left; a link or a folder of another user planted at `/dev/shm/nordtv.d` replaced
   by root's `0700` folder.
 
+**nordtv 1.1.3 and VPN 1.1.1**, on the same TV, now on Vetro 0.7.0 (the binary run by hand, the Shard installed
+from its bundle), with a split copy of the `nas-lan` profile (`AllowedIPs = 10.8.0.0/24`, `DNS = 192.168.0.1`,
+`PersistentKeepalive = 0`):
+
+- with a server address that never answers: no DNS redirect for the 3.5 minutes it ran, and the TV's DNS worked;
+- with the real server: the first handshake within 30 s, the DNS redirect on from then; idle for 4 minutes, the
+  session long expired: not stalled, the redirect kept; 120 s idle after the first handshake: no packet at all to
+  the server (the probing keepalives stopped);
+- the server's replies dropped while traffic was sent: after 3 minutes stalled the redirect was removed ("DNS back
+  to the TV's own servers"), and 15 s after the replies came back the tunnel answered and the redirect returned;
+- after `nordtv down` the routes, rules, interfaces and firewall rules were identical to before (checksum);
+- a profile saved from the Shard: its text reached `nordtv` through the handoff file, which was gone afterwards.
+
 **Both:**
 
 - after every stop, `ip rule`, the routes, the interfaces and the `iptables` / `ip6tables` rules were identical to
@@ -241,5 +272,5 @@ scripts):
 - configs refused by `nordtv`: no IPv4 address or IPv4 `AllowedIPs`, an IPv6 endpoint, two peers, bad keys, a bad
   MTU, a missing endpoint or port (Go tests); bad profile names (on the TV and in the tests);
 - off the TV: the binary download (installed only with the pinned hash, any other file refused), the leftover
-  cleanup after a crash (stubbed `iptables` / `ip` in a real shell), the reset, and the Shard inside Vetro 0.5.0's
-  plugin host.
+  cleanup after a crash (stubbed `iptables` / `ip` in a real shell), the reset, the stall rules (Go tests), the handoff file (never on a command line, mode 600, removed), and the
+  Shard inside Vetro 0.5.0's plugin host.

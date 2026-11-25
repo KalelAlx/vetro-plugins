@@ -11,10 +11,12 @@
 //  - Before each command it is copied to /dev/shm/nordtv.d, a root-only folder in memory where the TV lets it run
 //    (also after every boot); the binary keeps its lock and pid files there too.
 // State lives in the binary's own files (/opt/nordtv/config, token, log); the same commands work from a shell.
-// The token and the profiles' .conf text are written through base64 and never read back: the binary's state lists
+// The token and the profiles' .conf text never go on a command line, where every process on the TV could read them
+// in /proc (the root agent runs each command as `sh -c TEXT`): they are written to a file of their own in this
+// Shard's folder (handoff), which the command reads and deletes. They are never read back: the binary's state lists
 // a profile's endpoint, address, AllowedIPs and DNS, never its keys. Plain ES5: older TVs run Node 4.4.
-var fs = require('fs'), path = require('path');
-var BINARY = { url: 'https://raw.githubusercontent.com/andrearicci93/vetro-plugins/main/helpers/nordtv-1.1.2.gz', sha256: 'b56117fb6d34fbb09f9d5acfaab76a256f67de9386f94c6c7fc8e0a32ecc57e4' };   // helpers/nordtv-1.1.2.gz in the catalog, rebuilt from nordtv/ by its CI
+var fs = require('fs'), path = require('path'), crypto = require('crypto');
+var BINARY = { url: 'https://raw.githubusercontent.com/andrearicci93/vetro-plugins/main/helpers/nordtv-1.1.3.gz', sha256: '8a14776732998247fe9f9bfcb061c637a257110e5c537ad39eeaab3a0f5a01e6' };   // helpers/nordtv-1.1.3.gz in the catalog, rebuilt from nordtv/ by its CI
 var DIR = '/opt/nordtv', RUNDIR = '/dev/shm/nordtv.d', RUN = RUNDIR + '/nordtv';
 var COUNTRY = /^[A-Z]{2}$/, PROFILE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/, PROVIDERS = ['nordvpn', 'wireguard'], MAX_CONF = 8192, TOKEN = /^[A-Za-z0-9_-]{16,256}$/, SHA = /^[0-9a-f]{64}$/, URL_RE = /^https:\/\/[A-Za-z0-9.\/_~%+-]+$/;
 var RETRY_MS = 120000, TICK_MS = 60000, FIRST_TICK_MS = 15000, MAX_BODY = 16384;
@@ -95,7 +97,7 @@ function checkChoice(o, s) {
     if (p.error) throw new Error('Profile ' + profile + ': ' + p.error);
 }
 
-function Vpn(execute, bin) { this.execute = execute; this.bin = bin || BINARY; this.busy = false; this.countryList = null; this.autoFailedAt = 0; this.lastAuto = null; this.lastInstall = null; this.last = null; this.installing = null; this.needInstall = true; }
+function Vpn(execute, bin, dir) { this.execute = execute; this.bin = bin || BINARY; this.dir = dir || ''; this.busy = false; this.countryList = null; this.autoFailedAt = 0; this.lastAuto = null; this.lastInstall = null; this.last = null; this.installing = null; this.needInstall = true; }
 function lock(self, work) {
     if (self.busy) return Promise.reject(new Error('VPN change already in progress'));
     self.busy = true;
@@ -195,16 +197,34 @@ Vpn.prototype.configure = function (opts) {
         });
     });
 };
+// Hands a secret to a root command without a command line: the text goes to a new file in the Shard's folder
+// (mode 0600, made with O_EXCL under a random name, so nothing can be there first), `use(file)` returns the script
+// that reads it, and the script deletes it, as this does again whatever happens. Leftovers of a crash are removed
+// at start (clearHandoffs).
+var HANDOFF = /^handoff-[0-9a-f]{32}$/;
+function handoff(self, text, use) {
+    if (!self.dir) return Promise.reject(new Error('No folder for this Shard'));
+    var file = path.join(self.dir, 'handoff-' + crypto.randomBytes(16).toString('hex'));
+    if (!/^\/[A-Za-z0-9_.\/-]+$/.test(file)) return Promise.reject(new Error('Unexpected Shard folder ' + self.dir));   // it goes in a script
+    try { var fd = fs.openSync(file, 'wx', 384); try { fs.writeSync(fd, bytes(text), 0, bytes(text).length, 0); } finally { fs.closeSync(fd); } }
+    catch (e) { try { fs.unlinkSync(file); } catch (x) { /* not made */ } return Promise.reject(new Error('Could not hand the data over: ' + e.message)); }
+    function gone() { try { fs.unlinkSync(file); } catch (e) { /* the script removed it */ } }
+    return Promise.resolve().then(function () { return use("'" + file + "'"); }).then(function (r) { gone(); return r; }, function (e) { gone(); throw e; });
+}
+function clearHandoffs(dir) {
+    var names = []; try { names = fs.readdirSync(dir || ''); } catch (e) { return; }
+    names.forEach(function (n) { if (HANDOFF.test(n)) { try { fs.unlinkSync(path.join(dir, n)); } catch (e) { /* gone */ } } });
+}
+
 // Saves a wg-quick .conf as a profile. The binary checks it (keys, IPv4 Address and Endpoint, AllowedIPs, one peer)
-// and refuses it otherwise; its error is passed on. The text goes through base64 and is never read back.
+// and refuses it otherwise; its error is passed on. The text goes through handoff() and is never read back.
 Vpn.prototype.addProfile = function (name, conf) {
     var self = this;
     if (typeof name !== 'string' || !PROFILE.test(name)) return Promise.reject(new Error('Profile name: letters, digits, - and _, up to 32'));
     if (typeof conf !== 'string' || !/privatekey\s*=/i.test(conf) || !/\[peer\]/i.test(conf)) return Promise.reject(new Error('Paste a WireGuard .conf with [Interface] and [Peer]'));
     if (bytes(conf).length > MAX_CONF) return Promise.reject(new Error('The .conf is too large'));
-    var b64 = bytes(conf).toString('base64');
     return lock(this, function () {
-        return self.execute(wrap(STAGE + 'echo ' + b64 + ' | base64 -d | ' + RUN + ' profile add ' + name + ' 2>&1'), 15000).then(function (r) {
+        return handoff(self, conf, function (f) { return self.execute(wrap(STAGE + RUN + ' profile add ' + name + ' < ' + f + ' 2>&1; rm -f ' + f), 15000); }).then(function (r) {
             if (/__NOBIN__/.test(r.stdout || '')) throw new Error('The VPN program is not installed');
             if (r.exit_code !== 0 || !/saved profile/.test(r.stdout || '')) throw failure(r, 'Profile not saved');
             return self.read(false);
@@ -227,9 +247,10 @@ Vpn.prototype.removeProfile = function (name) {
 Vpn.prototype.setToken = function (token) {
     var self = this;
     if (typeof token !== 'string' || !TOKEN.test(token.trim())) return Promise.reject(new Error('Invalid token format'));
-    var b64 = bytes(token.trim() + '\n').toString('base64');
     return lock(this, function () {
-        return self.execute(wrap(STAGE + 'umask 077\nmkdir -p ' + DIR + '\necho ' + b64 + ' | base64 -d > ' + DIR + '/token.new && mv -f ' + DIR + '/token.new ' + DIR + '/token\n' + RUN + ' verify'), 30000).then(function (r) {
+        return handoff(self, token.trim() + '\n', function (f) {
+            return self.execute(wrap(STAGE + 'umask 077\nmkdir -p ' + DIR + '\ncat ' + f + ' > ' + DIR + '/token.new && mv -f ' + DIR + '/token.new ' + DIR + '/token\nrm -f ' + f + '\n' + RUN + ' verify'), 30000);
+        }).then(function (r) {
             if (/__NOBIN__/.test(r.stdout || '')) throw new Error('The VPN program is not installed');
             var v = lastJson(r.stdout); if (!v) throw failure(r, 'Token check unavailable');
             return self.read(false).then(function (s) { s.tokenCheck = v; return s; });
@@ -296,7 +317,7 @@ function loadPage(ctx) {
     return '<!doctype html><meta charset="utf-8"><p>Page file missing: reinstall this Shard.</p>';
 }
 module.exports = function (ctx) {
-    var vpn = new Vpn(ctx.execute), page = null, timer = null, first = null, stopped = true;
+    var vpn = new Vpn(ctx.execute, null, ctx.dir), page = null, timer = null, first = null, stopped = true;
     function noop() { /* recorded in lastInstall / lastAuto; the root agent may not be up yet */ }
     function tick() { if (stopped) return; vpn.maybeInstall().catch(noop).then(function () { if (!stopped) return vpn.supervise(); }).catch(noop); }
     function reply(res, p) { p.then(function (d) { json(res, d); }, function (e) { json(res, { ok: false, error: String(e && e.message || e) }, 409); }); }
@@ -304,6 +325,7 @@ module.exports = function (ctx) {
         start: function () {
             stopped = false;
             page = loadPage(ctx);
+            clearHandoffs(ctx.dir);
             // Install (or update) the binary first, then begin supervising; neither may throw out of start(). Each
             // tick installs again while that has not worked (maybeInstall).
             first = setTimeout(tick, FIRST_TICK_MS);

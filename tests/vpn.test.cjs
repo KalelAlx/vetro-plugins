@@ -1,5 +1,5 @@
 'use strict';
-// The vpn Shard's side of the review of nordtv 1.1.2 (vetro-plugins#13), against a fake root agent: the install runs
+// The vpn Shard's side of the review of nordtv 1.1.2 and its follow-ups (vetro-plugins#13), against a fake root agent: the install runs
 // one at a time and never next to another change, it is retried while the pinned binary is missing, a start without
 // what the provider needs never takes a tunnel down, and an `up` still connecting is left alone. The shell scripts
 // themselves ran on the TV (see the Shard README, "Tested").
@@ -86,4 +86,32 @@ test('supervise leaves an `up` that is still connecting alone', async () => {
 
 test('the leftover check recognises a starting `up` of this and of older versions', () => {
     assert.match(vpn.LEFTOVER, /grep -q -e "\^\/dev\/shm\/nordtv\.d\/nordtv up" -e "\^\/dev\/shm\/nordtv up"/);
+});
+
+// Follow-up of the review: the token and a .conf never go on a command line (the root agent runs `sh -c TEXT`,
+// readable by every process in /proc). They go through a 0600 file in the Shard's folder, removed afterwards.
+test('secrets go through a handoff file, never through the command', async () => {
+    const fs = require('fs'), os = require('os'), path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vpn-handoff-'));
+    const TOKEN = 'abcdefghijklmnop0123456789ABCDEF', CONF = '[Interface]\nPrivateKey = c2VjcmV0LWtleS1zZWNyZXQta2V5LXNlY3JldC1rZXk=\nAddress = 10.0.0.2/32\n[Peer]\nPublicKey = x\nEndpoint = 1.2.3.4:51820\nAllowedIPs = 0.0.0.0/0\n';
+    const during = [];
+    const a = agent(s => {
+        const m = /< '([^']+)'|cat '([^']+)'/.exec(s);
+        if (m) { const f = m[1] || m[2]; during.push({ f, text: fs.readFileSync(f, 'utf8'), mode: fs.statSync(f).mode & 0o777 }); }
+        if (/ verify$/.test(s)) return '{"ok":true}';
+        if (/ profile add /.test(s)) return 'saved profile home';
+        return isState(s) ? '__SOURCE_' + SHA + '__\n' + state() : '';
+    });
+    const v = new vpn.Vpn(a.execute, null, dir);
+    await v.setToken(TOKEN);
+    await v.addProfile('home', CONF);
+    assert.deepEqual(during.map(d => d.text), [TOKEN + '\n', CONF]);
+    assert.ok(during.every(d => d.mode === 0o600 && path.dirname(d.f) === dir && /\/handoff-[0-9a-f]{32}$/.test(d.f)));
+    assert.ok(during.every(d => !fs.existsSync(d.f)), 'removed afterwards');
+    const all = a.seen.join('\n');
+    for (const secret of [TOKEN, 'c2VjcmV0LWtleS1zZWNyZXQta2V5LXNlY3JldC1rZXk', Buffer.from(TOKEN + '\n').toString('base64'), Buffer.from(CONF).toString('base64')]) {
+        assert.ok(!all.includes(secret), 'not in any command');
+    }
+    assert.deepEqual(fs.readdirSync(dir), []);
+    await assert.rejects(new vpn.Vpn(a.execute).setToken(TOKEN), /No folder/);
 });
