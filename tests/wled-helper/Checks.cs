@@ -112,7 +112,7 @@ class Checks
     static void TuningAndRuntimeSafety(string root)
     {
         // Minimal JSON with only IsRequired fields must preserve controls.json defaults via [OnDeserializing].
-        string minJson = "{\"Hdr\":\"auto\",\"Saturation\":100,\"Brightness\":100,\"Gamma\":100,\"Reference\":203,\"Black\":0,\"Red\":100,\"Green\":100,\"Blue\":100,\"Smooth\":125,\"CaptureHz\":60,\"SendHz\":62,\"Source\":\"auto\",\"Fallback\":16,\"Bars\":\"both\",\"Depth\":16,\"SampleMode\":\"average\",\"Offset\":0,\"Direction\":\"normal\",\"Wled\":\"192.0.2.10\",\"Leds\":538,\"Zones\":512,\"ZonesMode\":\"match\",\"StartCorner\":\"bottom-left\"}";
+        string minJson = "{\"Hdr\":\"auto\",\"Saturation\":100,\"Brightness\":100,\"Gamma\":100,\"Reference\":203,\"Black\":0,\"Red\":100,\"Green\":100,\"Blue\":100,\"Smooth\":125,\"CaptureHz\":60,\"SendHz\":62,\"Source\":\"auto\",\"Fallback\":16,\"Bars\":\"both\",\"Depth\":16,\"SampleMode\":\"average\",\"Offset\":0,\"Direction\":\"normal\",\"Wled\":\"192.168.2.10\",\"Leds\":538,\"Zones\":512,\"ZonesMode\":\"match\",\"StartCorner\":\"bottom-left\"}";
         string cfgPath = Path.Combine(root, "tuning.json");
         File.WriteAllText(cfgPath, minJson);
         var fallback = new Tuning();
@@ -123,19 +123,33 @@ class Checks
         Require(loaded.Protocol == "ddp");
         Require(loaded.HasTarget);
 
-        // Out-of-range Depth, negative Smooth, and malformed/non-routable Wled must be rejected or marked non-target.
+        File.WriteAllText(cfgPath, minJson.Replace("\"Brightness\":100", "\"Brightness\":50"));
+        var dimmed = Tuning.ReadFrom(cfgPath, loaded);
+        byte[] picture = {200, 100, 50}, audio = {200, 100, 50};
+        dimmed.Apply(picture);
+        dimmed.ApplyAudio(audio);
+        Require(picture[0] == 100 && picture[1] == 50 && picture[2] == 25);
+        Require(audio[0] == 100 && audio[1] == 50 && audio[2] == 25);
+
+        // Out-of-range Depth, negative Smooth, and malformed/non-private Wled must be rejected or marked non-target.
         File.WriteAllText(cfgPath, minJson.Replace("\"Depth\":16", "\"Depth\":500"));
         Require(Tuning.ReadFrom(cfgPath, loaded) == loaded);
         File.WriteAllText(cfgPath, minJson.Replace("\"Smooth\":125", "\"Smooth\":-5"));
         Require(Tuning.ReadFrom(cfgPath, loaded) == loaded);
-        File.WriteAllText(cfgPath, minJson.Replace("192.0.2.10", "not-an-ip"));
+        File.WriteAllText(cfgPath, minJson.Replace("192.168.2.10", "not-an-ip"));
         Require(Tuning.ReadFrom(cfgPath, loaded) == loaded);
-        Require(!Tuning.IsRoutableTarget("0.0.0.0"));
-        Require(!Tuning.IsRoutableTarget("127.0.0.1"));
-        Require(!Tuning.IsRoutableTarget("169.254.1.1"));
-        Require(!Tuning.IsRoutableTarget("224.0.0.1"));
-        Require(!Tuning.IsRoutableTarget("255.255.255.255"));
-        Require(Tuning.IsRoutableTarget("192.168.1.50"));
+        File.WriteAllText(cfgPath, minJson.Replace("192.168.2.10", "192.0.2.10"));
+        Require(!Tuning.ReadFrom(cfgPath, loaded).HasTarget);
+        Require(!Tuning.IsPrivateTarget("0.0.0.0"));
+        Require(!Tuning.IsPrivateTarget("127.0.0.1"));
+        Require(!Tuning.IsPrivateTarget("169.254.1.1"));
+        Require(!Tuning.IsPrivateTarget("224.0.0.1"));
+        Require(!Tuning.IsPrivateTarget("255.255.255.255"));
+        Require(!Tuning.IsPrivateTarget("172.32.0.1"));
+        Require(!Tuning.IsPrivateTarget("192.168.1.01"));
+        Require(Tuning.IsPrivateTarget("192.168.1.50"));
+        Require(Tuning.IsPrivateTarget("10.3.1.13"));
+        Require(Tuning.IsPrivateTarget("172.31.2.1"));
 
         // WriteRuntimeFile writes atomically and refuses symlink targets and symlink directories.
         string runtime = Path.Combine(root, "rt");
@@ -152,6 +166,18 @@ class Checks
         Directory.CreateSymbolicLink(symDir, runtime);
         Require(!WledAmbiPpi.WriteRuntimeFile(symDir, "rate.txt", "bad"));
         Require(File.ReadAllText(Path.Combine(runtime, "rate.txt")) == "ok");
+
+        string heartbeat = Path.Combine(runtime, "capture-heartbeat");
+        DateTime now = DateTime.UtcNow;
+        Require(!WledAmbiPpi.HasCaptureHeartbeat(runtime, now));
+        File.WriteAllText(heartbeat, "");
+        File.SetLastWriteTimeUtc(heartbeat, now.AddSeconds(-2));
+        Require(WledAmbiPpi.HasCaptureHeartbeat(runtime, now));
+        Require(!WledAmbiPpi.HasCaptureHeartbeat(symDir, now));
+        Require(!WledAmbiPpi.HasCaptureHeartbeat(runtime, now.AddSeconds(7)));
+        File.Delete(heartbeat);
+        File.CreateSymbolicLink(heartbeat, victim);
+        Require(!WledAmbiPpi.HasCaptureHeartbeat(runtime, now.AddSeconds(1)));
     }
     static void Main()
     {

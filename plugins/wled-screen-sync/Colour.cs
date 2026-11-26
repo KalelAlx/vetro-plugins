@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.IO;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 
@@ -505,6 +506,24 @@ internal static class WledAmbiPpi
     }
     private static string statusDir;
 
+    internal static bool HasCaptureHeartbeat(string dir, DateTime? observedAt = null)
+    {
+        if (String.IsNullOrEmpty(dir)) return false;
+        try
+        {
+            if ((File.GetAttributes(dir) & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != FileAttributes.Directory)
+                return false;
+            var heartbeat = new FileInfo(Path.Combine(dir, "capture-heartbeat"));
+            if (!heartbeat.Exists || (heartbeat.Attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+                return false;
+            DateTime updated = heartbeat.LastWriteTimeUtc;
+            double age = ((observedAt ?? DateTime.UtcNow) - updated).TotalSeconds;
+            return age >= 0 && age <= 8;
+        }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+    }
+
     internal static bool WriteRuntimeFile(string dir, string filename, string content)
     {
         if (String.IsNullOrEmpty(dir)) return false;
@@ -712,6 +731,11 @@ internal static class WledAmbiPpi
             if(args[i]=="--status-dir" && i+1<args.Length) statusDir=args[++i];
         }
         if(IntPtr.Size!=4 || !BitConverter.IsLittleEndian) { Console.Error.WriteLine("32-bit little-endian runtime required"); return 2; }
+        if (!HasCaptureHeartbeat(statusDir))
+        {
+            Console.Error.WriteLine("Capture owner heartbeat missing or expired");
+            return 1;
+        }
         TvAudioCapture.Binding = new PlaybackBinding(statusDir);
         TvAudioCapture.PlaybackDevice("/proc/asound", TvAudioCapture.Binding);
         tuning = Tuning.Read(tuning);
@@ -730,6 +754,7 @@ internal static class WledAmbiPpi
         double previous = 0;
         double next = 0;
         double nextConfigRead = 0;
+        double nextHeartbeatCheck = 0;
         var pictureWorker = new PictureWorker(Capture, TizenAmbilight.VideoPlaneCapture.Release);
         double nextAudioStatus = 0, nextAudioSourcePoll = 0;
         int activeAudioSource = -1, previousObservation = -1;
@@ -745,6 +770,16 @@ internal static class WledAmbiPpi
             while (true)
             {
                 double now = clock.Elapsed.TotalMilliseconds;
+                if (now >= nextHeartbeatCheck)
+                {
+                    if (!HasCaptureHeartbeat(statusDir))
+                    {
+                        TvAudioCapture.Update(false, tuning, false);
+                        Console.Error.WriteLine("Capture owner heartbeat missing or expired");
+                        return 0;
+                    }
+                    nextHeartbeatCheck = now + 250;
+                }
                 if (now >= nextConfigRead)
                 {
                     tuning = Tuning.Read(tuning);

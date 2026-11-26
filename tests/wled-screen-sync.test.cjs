@@ -53,20 +53,24 @@ test('controller deadlines, oversized bodies and interrupted responses complete 
 function harness(t, initial) {
     const dir=fs.mkdtempSync(path.join(os.tmpdir(),'studio-check-'));
     t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
-    let data={...initial}, power=false, failRestore=false;
-    const writes=[], commands=[];
+    let data={...initial}, failRestore=false, rejectPowerOn, rejectInfo;
+    const writes=[], commands=[], requests=[], power=new Map();
     t.mock.method(http,'request',(opts,onResponse)=>{
         const req=new events.EventEmitter();
         req.setTimeout=req.destroy=()=>{};
         req.end=body=>queueMicrotask(()=>{
+            requests.push(opts);
             const res=new events.EventEmitter();
             res.statusCode=200;
-            let result={on:power,seg:[{id:0,fx:77}]};
+            let result=opts.path==='/json/info'
+                ? {brand:opts.host===rejectInfo?'Other':'WLED',ver:'0.15.0',leds:{count:538}}
+                : {on:power.get(opts.host)||false,bri:60,seg:[{id:0,fx:77}]};
             if(body){
                 const patch=JSON.parse(body); writes.push(patch);
                 if(failRestore && patch.on===false)res.statusCode=503;
-                else power=patch.on;
-                result={success:res.statusCode===200};
+                const accepted=res.statusCode===200 && !(patch.on===true && opts.host===rejectPowerOn);
+                if(accepted && typeof patch.on==='boolean')power.set(opts.host,patch.on);
+                result={success:accepted};
             }
             onResponse(res);res.emit('data',Buffer.from(JSON.stringify(result)));res.emit('end');
         });
@@ -74,24 +78,25 @@ function harness(t, initial) {
     });
     return {ctx:{dir,config:{get:()=>structuredClone(data),set:v=>{data=structuredClone(v);}},
         execute:async cmd=>{commands.push(cmd);return {exit_code:0,stdout:'inactive'};}},
-        writes,commands,fail:v=>{failRestore=v;}};
+        writes,commands,requests,power,fail:v=>{failRestore=v;},
+        rejectPowerOn:host=>{rejectPowerOn=host;},rejectInfo:host=>{rejectInfo=host;}};
 }
 
 test('power snapshot survives lost stop, retries failed restore, never writes segment edits',async t=>{
-    const h=harness(t,{Wled:'192.0.2.1'}), create=require('../plugins/wled-screen-sync/settings');
+    const h=harness(t,{Wled:'192.168.2.1'}), create=require('../plugins/wled-screen-sync/settings');
     const instance=()=>create(h.ctx,()=>({}),()=>{});
     await instance().start();
-    assert.deepEqual(h.ctx.config.get().savedWledStates,{'192.0.2.1':{on:false}});
+    assert.deepEqual(h.ctx.config.get().savedWledStates,{'192.168.2.1':{on:false}});
     const restart=instance();await restart.start();
     h.fail(true);await assert.rejects(restart.stop(),/503/);
-    assert.deepEqual(h.ctx.config.get().savedWledStates,{'192.0.2.1':{on:false}});
+    assert.deepEqual(h.ctx.config.get().savedWledStates,{'192.168.2.1':{on:false}});
     h.fail(false);await restart.stop();
     assert.deepEqual(h.ctx.config.get().savedWledStates,{});
     assert.deepEqual(h.writes,[{on:true},{on:false},{on:false}]);
 });
 
 test('a launch acknowledgement does not reset the five-start crash budget',async t=>{
-    const h=harness(t,{Wled:'192.0.2.1',Lighting:'tv-audio'});
+    const h=harness(t,{Wled:'192.168.2.1',Lighting:'tv-audio'});
     const timers=new Map();
     t.mock.method(global,'setInterval',(fn,ms)=>{timers.set(ms,fn);return ms;});
     t.mock.method(global,'clearInterval',ms=>timers.delete(ms));
@@ -132,18 +137,24 @@ function routeCall(fn, method, sub, payload) {
     });
 }
 
-test('wled-probe and settings reject loopback/special IPv4 targets and preserve explicit side counts', async t => {
+test('wled-probe and settings accept only private WLED targets and preserve explicit side counts', async t => {
     const h = harness(t, {Wled: '127.0.0.1'});
     const create = require('../plugins/wled-screen-sync/settings');
     const route = create(h.ctx, () => ({state: 'active'}), () => {});
-    for (const bad of ['127.0.0.1', '0.0.0.0', '169.254.1.1', '224.0.0.1', '255.255.255.255']) {
+    for (const bad of ['127.0.0.1', '0.0.0.0', '169.254.1.1', '224.0.0.1', '255.255.255.255', '192.0.2.1', '172.32.0.1', '192.168.1.01']) {
         const res = await routeCall(route, 'POST', 'wled-probe', {address: bad});
         assert.equal(res.code, 400);
     }
-    const badSetting = await routeCall(route, 'POST', 'settings', {Wled: '0.0.0.0'});
+    const badSetting = await routeCall(route, 'POST', 'settings', {Wled: '192.0.2.1'});
     assert.equal(badSetting.code, 400);
+    assert.equal(h.requests.length, 0);
+    h.rejectInfo('10.0.0.1');
+    assert.equal((await routeCall(route, 'POST', 'settings', {Wled: '10.0.0.1'})).code, 400);
+    assert.equal((await routeCall(route, 'POST', 'wled-probe', {address: '10.0.0.1'})).code, 400);
+    assert(h.requests.every(request=>request.path==='/json/info'));
+    assert.equal(h.writes.length, 0);
     const custom = await routeCall(route, 'POST', 'settings', {
-        Wled: '192.0.2.50', TopCount: 50, RightCount: 10, BottomCount: 0, LeftCount: 10
+        Wled: '192.168.2.50', TopCount: 50, RightCount: 10, BottomCount: 0, LeftCount: 10
     });
     assert.equal(custom.code, 200);
     assert.equal(custom.body.values.TopCount, 50);
@@ -152,7 +163,7 @@ test('wled-probe and settings reject loopback/special IPv4 targets and preserve 
 });
 
 test('unreachable prior WLED controller does not lock out target switching and stale preview is cleared', async t => {
-    const h = harness(t, {Wled: '192.0.2.1', savedWledStates: {'192.0.2.1': {on: false}}});
+    const h = harness(t, {Wled: '192.168.2.1', savedWledStates: {'192.168.2.1': {on: false}}});
     h.fail(true);
     const create = require('../plugins/wled-screen-sync/settings');
     let liveState = {state: 'stopped'};
@@ -160,7 +171,7 @@ test('unreachable prior WLED controller does not lock out target switching and s
     const sw = await routeCall(route, 'POST', 'settings', {Wled: '127.0.0.1'});
     assert.equal(sw.code, 200);
     assert.equal(h.ctx.config.get().Wled, '127.0.0.1');
-    assert.deepEqual(h.ctx.config.get().savedWledStates, {'192.0.2.1': {on: false}});
+    assert.deepEqual(h.ctx.config.get().savedWledStates, {'192.168.2.1': {on: false}});
 
     fs.mkdirSync(path.join(h.ctx.dir, 'runtime'), {recursive: true});
     const previewPath = path.join(h.ctx.dir, 'runtime', 'preview.b64');
@@ -172,4 +183,58 @@ test('unreachable prior WLED controller does not lock out target switching and s
     fs.utimesSync(previewPath, oldTime, oldTime);
     const stalePrev = await routeCall(route, 'GET', 'preview');
     assert.equal(stalePrev.body.rgb, '');
+});
+
+test('brightness changes never write controller state', async t => {
+    const address='192.168.2.1';
+    const h=harness(t,{Wled:address});
+    h.power.set(address,true);
+    const route=require('../plugins/wled-screen-sync/settings')(h.ctx,()=>({}));
+    await route.start();
+    const result=await routeCall(route,'POST','settings',{Brightness:40});
+    assert.equal(result.code,200);
+    assert.equal(h.ctx.config.get().Brightness,40);
+    await route.stop();
+    assert.deepEqual(h.writes,[]);
+});
+
+test('a rejected replacement leaves the original powered on and keeps its snapshot', async t => {
+    const previous='192.168.2.1', next='192.168.2.2';
+    const h=harness(t,{Wled:previous});
+    h.rejectPowerOn(next);
+    const route=require('../plugins/wled-screen-sync/settings')(h.ctx,()=>({}));
+    await route.start();
+    const result=await routeCall(route,'POST','settings',{Wled:next});
+    assert.equal(result.code,400);
+    assert.equal(h.ctx.config.get().Wled,previous);
+    assert.equal(h.power.get(previous),true);
+    assert.equal(h.power.get(next),false);
+    assert.deepEqual(h.ctx.config.get().savedWledStates,{[previous]:{on:false}});
+});
+
+test('capture stop and restart failures revoke the heartbeat and report failure', async t => {
+    const h=harness(t,{Wled:'192.168.2.1',Lighting:'tv-audio'});
+    let timedOut=false;
+    h.ctx.execute=async cmd=>{
+        h.commands.push(cmd);
+        if(cmd.startsWith('systemctl stop'))return {exit_code:timedOut?0:1,timed_out:timedOut};
+        return {exit_code:0,stdout:'active'};
+    };
+    const shard=require('../plugins/wled-screen-sync')(h.ctx);
+    t.after(()=>shard.stop());
+    await shard.start();
+    const heartbeat=path.join(h.ctx.dir,'runtime','capture-heartbeat');
+    assert(fs.existsSync(heartbeat));
+    const restart=await routeCall(shard.route,'POST','capture-action',{action:'restart'});
+    assert.equal(restart.code,500);
+    assert.equal(shard.status().state,'stop-failed');
+    assert(!fs.existsSync(heartbeat));
+    assert(!h.commands.some(command=>command.includes('systemd-run')));
+    assert.equal((await routeCall(shard.route,'POST','capture-action',{action:'start'})).body.ok,true);
+    assert(fs.existsSync(heartbeat));
+    timedOut=true;
+    const stop=await routeCall(shard.route,'POST','capture-action',{action:'stop'});
+    assert.equal(stop.code,500);
+    assert.match(stop.body.error,/timed out/);
+    assert(!fs.existsSync(heartbeat));
 });

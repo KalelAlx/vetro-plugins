@@ -1,5 +1,6 @@
 'use strict';
 var dgram = require('dgram');
+var isPrivateIpv4 = require('./target');
 var service = '_wled._tcp.local';
 
 // DNS names can refer back to earlier labels in the same packet.
@@ -58,7 +59,7 @@ module.exports = function discover() {
         var timer = setTimeout(finish, 3000);
         socket.on('error', finish);
         socket.on('message', function(packet, peer) {
-            if (peer.port !== 5353 || /^127\./.test(peer.address)) return;
+            if (peer.port !== 5353 || !isPrivateIpv4(peer.address)) return;
             if (!Object.prototype.hasOwnProperty.call(devices, peer.address) && count >= 64) return;
             try {
                 var name = instance(packet);

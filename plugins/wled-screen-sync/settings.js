@@ -1,14 +1,6 @@
 'use strict';
 var fs = require('fs'), path = require('path'), request = require('./controller');
-var fields = require('./controls.json');
-function isRoutableIpv4(address) {
-    if (typeof address !== 'string') return false;
-    var parts = address.split('.');
-    if (parts.length !== 4) return false;
-    var a = Number(parts[0]), b = Number(parts[1]);
-    if (a === 0 || a === 127 || a >= 224 || (a === 169 && b === 254)) return false;
-    return true;
-}
+var fields = require('./controls.json'), isPrivateIpv4 = require('./target');
 function valid(f, v) {
     if (f.type === 'toggle') return typeof v === 'boolean';
     if (f.type === 'color') return typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v);
@@ -39,20 +31,19 @@ function readBody(req, limit, res, onBody, onTooLarge) {
     });
 }
 module.exports = function(ctx, status, onModeChange) {
-    function httpGet(address,pathname,timeout,cb){
-        request(address,pathname,timeout,null,cb);
+    function adjustCounts(values, total) {
+        var ends=[0,172,269,441,538];
+        values.Leds=total;
+        ['Top','Right','Bottom','Left'].forEach(function(side,i){
+            values[side+'Count']=Math.round(total*ends[i+1]/538)-Math.round(total*ends[i]/538);
+        });
     }
     function load() {
         var old = ctx.config.get() || {}, values = {};
         fields.forEach(function(f){ values[f.key] = valid(f,old[f.key]) ? old[f.key] : f.default; });
         var effectKey={impact:'ImpactEffect',balanced:'BalancedEffect',music:'MusicEffect'}[values.AudioSampling];
         if(effectKey && old[effectKey]===undefined && old.AudioReaction===values.AudioReaction)values[effectKey]=values.AudioReaction;
-        if (old.TopCount === undefined) {
-            var total=values.Leds, ends=[0,172,269,441,538];
-            ['Top','Right','Bottom','Left'].forEach(function(side,i){
-                values[side+'Count']=Math.round(total*ends[i+1]/538)-Math.round(total*ends[i]/538);
-            });
-        }
+        if (old.TopCount === undefined) adjustCounts(values,values.Leds);
         return values;
     }
     var discovery, current=load(), stopped=false, queue=Promise.resolve();
@@ -68,42 +59,50 @@ module.exports = function(ctx, status, onModeChange) {
         queue=work.catch(function(){});
         return work;
     }
-    function stateRequest(address,patch){
+    function wledRequest(address,endpoint,patch){
         return new Promise(function(resolve,reject){
-            request(address,'/json/state',4000,patch===null?null:JSON.stringify(patch),function(error,code,body){
+            if(!isPrivateIpv4(address))return reject(Error('Enter a private IPv4 address for WLED'));
+            request(address,endpoint,4000,patch===null?null:JSON.stringify(patch),function(error,code,body){
                 if(error || code<200 || code>=300)return reject(error||Error('WLED HTTP '+code));
-                if(patch!==null)return resolve();
                 try {resolve(JSON.parse(body));}catch(e){reject(e);}
             });
         });
     }
+    function readInfo(address){
+        return wledRequest(address,'/json/info',null).then(function(info){
+            var count=info && info.leds && info.leds.count;
+            if(!info || info.brand!=='WLED' || typeof info.ver!=='string' || !info.ver ||
+                typeof count!=='number' || count!==Math.floor(count) || !isFinite(count) || count<1)
+                throw Error('Invalid WLED response');
+            return info;
+        });
+    }
+    function writePower(address,on){
+        return wledRequest(address,'/json/state',{on:on}).then(function(result){
+            if(!result || result.success!==true)throw Error('WLED did not accept the power change');
+        });
+    }
     function restoreWled(address){
-        if(!Object.prototype.hasOwnProperty.call(savedWledStates,address))return Promise.resolve();
-        // Only power was changed. WLED retains its effect and segment edits under realtime output.
-        return stateRequest(address,{on:savedWledStates[address].on}).then(function(){
-            delete savedWledStates[address];persist(current);
+        var snapshot=savedWledStates[address];
+        if(!isPrivateIpv4(address) || !snapshot || typeof snapshot.on!=='boolean')return Promise.resolve();
+        return readInfo(address).then(function(){return writePower(address,snapshot.on);}).then(function(){
+            delete savedWledStates[address];
+            try {persist(current);}catch(e){savedWledStates[address]=snapshot;throw e;}
         });
     }
-    function enterWled(address,brightness){
-        if(!isRoutableIpv4(address))return Promise.resolve();
-        return stateRequest(address,null).then(function(state){
-            var patch={bri:Math.round(brightness*255/100)};
-            if(state.on===false){
-                savedWledStates[address]={on:false};
-                persist(current); // Durable before the controller is changed.
-                patch.on=true;
-            }
-            return stateRequest(address,patch);
+    function enterWled(address){
+        if(!isPrivateIpv4(address))return Promise.resolve();
+        return readInfo(address).then(function(info){
+            return wledRequest(address,'/json/state',null).then(function(state){
+                if(!state || typeof state.on!=='boolean')throw Error('Invalid WLED power state');
+                if(state.on)return info;
+                if(!Object.prototype.hasOwnProperty.call(savedWledStates,address)){
+                    savedWledStates[address]={on:false};
+                    try {persist(current);}catch(e){delete savedWledStates[address];throw e;}
+                }
+                return writePower(address,true).then(function(){return info;});
+            });
         });
-    }
-    function applyWledBrightness(address,brightness){
-        if(!isRoutableIpv4(address))return Promise.resolve();
-        return stateRequest(address,{bri:Math.round(brightness*255/100)});
-    }
-    function switchWledOutput(previous,next){
-        if(previous.Wled===next.Wled)return Promise.resolve();
-        // Failed restores stay pending so an offline controller cannot lock out target switching.
-        return restoreWled(previous.Wled).catch(function(){}).then(function(){return enterWled(next.Wled,next.Brightness);});
     }
     function json(res,value,code) {
         res.writeHead(code || 200,{'Content-Type':'application/json','Cache-Control':'no-store'});
@@ -115,8 +114,7 @@ module.exports = function(ctx, status, onModeChange) {
             res.end(fs.readFileSync(path.join(__dirname,'panel.html')));return true;
         }
         if (sub === 'settings' && req.method === 'GET') {
-            current=load();
-            json(res,{fields:fields,values:current});return true;
+            json(res,{fields:fields,values:load()});return true;
         }
         if (sub === 'discover' && req.method === 'POST') {
             if (!discovery) discovery = require('./discover')().then(function(devices) {
@@ -130,7 +128,7 @@ module.exports = function(ctx, status, onModeChange) {
         if (sub === 'preview' && req.method === 'GET') {
             try {
                 var liveState = status ? status() : null;
-                if (liveState && (liveState.state === 'stopped' || liveState.state === 'waiting' || liveState.state === 'failed')) {
+                if (liveState && ['stopping','stopped','stop-failed','waiting','failed'].indexOf(liveState.state)>=0) {
                     json(res,{rgb:''});return true;
                 }
                 var preview=path.join(ctx.dir,'runtime','preview.b64');
@@ -148,16 +146,9 @@ module.exports = function(ctx, status, onModeChange) {
             readBody(req, 4096, res, function(probeBody) {
                 try {
                     var address=JSON.parse(probeBody).address;
-                    var field=fields.filter(function(item){return item.key==='Wled';})[0];
-                    if(!valid(field,address) || !isRoutableIpv4(address))throw Error('Enter a valid non-loopback WLED IPv4 address');
-                    httpGet(address,'/json/info',4000,function(error,code,body){
-                        if(error)return json(res,{error:error.message||'No WLED response at '+address},400);
-                        if(code<200||code>=300)return json(res,{error:'No WLED response at '+address},400);
-                        try {
-                            var info=JSON.parse(body);
-                            json(res,{address:address,name:info.name||'WLED',leds:info.leds&&info.leds.count,version:info.ver||''});
-                        } catch(e){json(res,{error:'Invalid WLED response'},400);}
-                    });
+                    readInfo(address).then(function(info){
+                        json(res,{address:address,name:typeof info.name==='string'?info.name:'WLED',leds:info.leds.count,version:info.ver});
+                    },function(error){json(res,{error:error.message},400);});
                 } catch(error) { json(res,{error:error.message},400); }
             }, function() { json(res,{error:'Probe payload too large'},413); });
             return true;
@@ -174,37 +165,28 @@ module.exports = function(ctx, status, onModeChange) {
                     if(!field || !valid(field,patch[k]))throw Error('Invalid setting: '+k);
                     next[k]=patch[k];
                 });
-                if(next.Wled!=='127.0.0.1' && !isRoutableIpv4(next.Wled))throw Error('Invalid setting: Wled');
+                if(next.Wled!=='127.0.0.1' && !isPrivateIpv4(next.Wled))throw Error('Enter a private IPv4 address for WLED');
                 next.Leds=next.TopCount+next.RightCount+next.BottomCount+next.LeftCount;
                 if(next.Leds<1 || next.Leds>4096)throw Error('The four sides must total 1 to 4096 LEDs.');
                 var explicitCounts=['TopCount','RightCount','BottomCount','LeftCount'].some(function(k){
                     return Object.prototype.hasOwnProperty.call(patch,k);
                 });
-                var probe=Promise.resolve();
-                if(next.Wled!==previous.Wled && isRoutableIpv4(next.Wled) && !explicitCounts){
-                    probe=new Promise(function(resolve){
-                        httpGet(next.Wled,'/json/info',4000,function(error,code,text){
-                            if(!error && code===200){
-                                try {
-                                    var leds=JSON.parse(text).leds, count=leds && leds.count;
-                                    if(count===Math.floor(count) && count>=1 && count<=4096){
-                                        var ends=[0,172,269,441,538];next.Leds=count;
-                                        ['Top','Right','Bottom','Left'].forEach(function(side,i){
-                                            next[side+'Count']=Math.round(count*ends[i+1]/538)-Math.round(count*ends[i]/538);
-                                        });
-                                    }
-                                }catch(e){}
-                            }
-                            resolve();
-                        });
-                    });
-                }
-                return probe.then(function(){return switchWledOutput(previous,next);}).then(function(){
-                    if(Object.prototype.hasOwnProperty.call(patch,'Brightness'))
-                        return applyWledBrightness(next.Wled,next.Brightness);
+                var switching=next.Wled!==previous.Wled;
+                return (switching?enterWled(next.Wled):Promise.resolve()).then(function(info){
+                    if(stopped)throw Error('Shard stopped');
+                    if(info && !explicitCounts && info.leds.count<=4096)adjustCounts(next,info.leds.count);
+                    persist(next);
+                    current=next;
+                }).catch(function(error){
+                    if(!switching)throw error;
+                    // A timed-out write may have reached the replacement. Its saved power state stays durable.
+                    return restoreWled(next.Wled).catch(function(){}).then(function(){throw error;});
                 }).then(function(){
-                    current=next;persist(next);
-                    if(onModeChange)onModeChange(next,previous);
+                    if(onModeChange)return onModeChange(next,previous);
+                }).then(function(){
+                    // Let the configured output switch before restoring the previous controller.
+                    if(switching)return restoreWled(previous.Wled).catch(function(){});
+                }).then(function(){
                     json(res,{values:next});
                 });
             }).catch(function(error){json(res,{error:error.message},400);});
@@ -212,13 +194,15 @@ module.exports = function(ctx, status, onModeChange) {
         return true;
     };
     route.start=function(){
-        stopped=false;persist(current);
+        stopped=false;
         return serial(function(){
+            persist(current);
             return Object.keys(savedWledStates).reduce(function(chain,address){
                 return address===current.Wled?chain:chain.then(function(){return restoreWled(address).catch(function(){});});
-            },Promise.resolve()).then(function(){return enterWled(current.Wled);});
+            },Promise.resolve()).then(function(){if(!stopped)return enterWled(current.Wled);});
         });
     };
+    route.pause=function(){stopped=true;};
     route.stop=function(){
         stopped=true;
         return serial(function(){return restoreWled(current.Wled);});

@@ -234,12 +234,12 @@
  {
   "group": "Color",
   "key": "Brightness",
-  "label": "WLED brightness",
+  "label": "LED brightness",
   "default": 100,
   "min": 0,
   "max": 100,
   "unit": "%",
-  "hint": "Sets the controller brightness in WLED. This is the strip’s brightness control."
+  "hint": "Scales the colors sent by Ambilight Studio."
  },
  {
   "group": "Color",
@@ -402,7 +402,7 @@
   "label": "WLED address",
   "default": "127.0.0.1",
   "type": "ipv4",
-  "hint": "Choose a controller or enter its IPv4 address. LED count is detected automatically."
+  "hint": "Choose a controller or enter its private IPv4 address. LED count is detected automatically."
  },
  {
   "group": "WLED target",

@@ -173,6 +173,7 @@ document.querySelectorAll('[data-action]').forEach(function(button){button.oncli
  el('captureMsg').textContent=action==='stop'?'Stopping…':action==='start'?'Starting…':'Restarting…';
  request('capture-action',{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({action:action})})
  .then(function(result){
+  if(!result.ok)throw Error('Capture action did not complete. Check Live diagnostics.');
   if(action==='restart'){el('captureMsg').textContent='Capture restarted';return;}
   el('captureMsg').textContent=action==='stop'?'Capture stopped':'Capture starting';
  }).then(function(){setTimeout(live,1200);})

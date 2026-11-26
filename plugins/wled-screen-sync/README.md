@@ -1,6 +1,6 @@
 # Ambilight Studio
 
-Samples TV picture colors and sends them to a configured WLED controller over DDP (UDP 4048). Configure the controller's IPv4 address under WLED target. Capture starts when a non-loopback controller address is configured. The default strip count is 538. Full-picture capture depends on firmware and input mode. The color sampler can provide lower resolution fallback.
+Samples TV picture colors and sends them to a configured WLED controller over DDP (UDP 4048). Configure the controller's private IPv4 address under WLED target. Supported ranges are 10.0.0.0/8, 172.16.0.0/12 and 192.168.0.0/16. The default strip count is 538. Full-picture capture depends on firmware and input mode. The color sampler can provide lower resolution fallback.
 
 In Advanced → Sampling, **Picture sampling resolution** requests a frame size and sets the maximum grid used by the LED zones and black-bar detector. The live readout shows both the native TV frame and the LED sampling grid. The QN85B returned 960 × 540 for all four requests. A smaller grid on this model takes effect after the native capture call.
 
@@ -18,7 +18,7 @@ Color accent picks the depth sample with the strongest chroma. Highlight picks t
 
 ## Output and strip layout
 
-Simple view provides daily lighting controls. Advanced view adds capture diagnostics and per-side LED counts and switches. Output supports 1–4096 RGB pixels over DDP or WLED DNRGB. Screen sync samples up to 538 zones. Realtime output leaves WLED segment settings alone. If the controller needs powering on, the shard saves its prior power state in Vetro config before sending the command. It restores that field on target change or shard stop. Failed restores stay pending.
+Simple view provides daily lighting controls. Advanced view adds capture diagnostics and per-side LED counts and switches. Output supports 1–4096 RGB pixels over DDP or WLED DNRGB. Screen sync samples up to 538 zones. LED brightness scales the outgoing RGB values locally, preserving the controller's brightness and segment settings. Before changing power, the shard checks the WLED information response. If the controller needs powering on, it saves the prior power state in Vetro config before sending the command. It prepares a replacement controller before restoring the old one. A shard stop restores the current controller's power state and failed restores stay pending.
 
 ## Audio response
 
@@ -45,7 +45,7 @@ The dashboard reports the signal state and received PCM bytes. Quiet audio fades
 - The shard uses HTTP port 80 for `GET /json/info`, `GET /json/state` and `POST /json/state`. UDP output uses DDP port 4048 or WLED DNRGB port 21324.
 - The helper runs as root and reads the video plane through Samsung private libraries (`libvideo-capture`, `libvideoenhance`) plus vconf `memory/system/source_type`.
 - The helper is 32-bit-only. It refuses 64-bit runtimes before native pointer access. If startup fails, Vetro retries with backoff and gives up after five attempts until Start is pressed again.
-- The private 0700 `runtime/` directory contains `rate.txt` and `preview.b64`. The shard refuses a symlink at that directory. The shard folder contains `hdr-state`, `picture-recovery-until`, config, and the installed helper DLL and runtime manifests.
+- The private 0700 `runtime/` directory contains `rate.txt`, `preview.b64` and `capture-heartbeat`. The shard refuses a symlink at that directory. Vetro renews the heartbeat every two seconds during capture. The helper exits when the heartbeat is removed or becomes more than eight seconds old, including after a Vetro crash. The shard folder contains `hdr-state`, `picture-recovery-until`, config, and the installed helper DLL and runtime manifests.
 
 ## Building the helper
 

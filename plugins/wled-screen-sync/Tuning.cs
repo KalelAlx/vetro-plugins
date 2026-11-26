@@ -64,17 +64,15 @@ internal sealed class Tuning
     [DataMember] public int RightCount = 97;
     [DataMember] public int BottomCount = 172;
     [DataMember] public int LeftCount = 97;
-    public static bool IsRoutableTarget(string address)
+    public static bool IsPrivateTarget(string address)
     {
         System.Net.IPAddress ip;
         if (string.IsNullOrEmpty(address) || !System.Net.IPAddress.TryParse(address, out ip)) return false;
-        if (ip.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork) return false;
+        if (ip.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork || ip.ToString() != address) return false;
         byte[] b = ip.GetAddressBytes();
-        if (b[0] == 0 || b[0] == 127 || b[0] >= 224) return false;
-        if (b[0] == 169 && b[1] == 254) return false;
-        return true;
+        return b[0] == 10 || (b[0] == 172 && b[1] >= 16 && b[1] <= 31) || (b[0] == 192 && b[1] == 168);
     }
-    public bool HasTarget { get { return IsRoutableTarget(Wled); } }
+    public bool HasTarget { get { return IsPrivateTarget(Wled); } }
     public int EffectiveZones { get { return ZonesMode=="match" ? Math.Min(538,Leds) : Zones; } }
     [DataMember(IsRequired=true)] public string StartCorner = "bottom-left";
     private byte[] redCurve, greenCurve, blueCurve;
@@ -165,12 +163,12 @@ internal sealed class Tuning
     {
         var table=new byte[256];
         for(int i=0;i<256;i++)
-            table[i]=(byte)Math.Min(255,Math.Round(255*Math.Pow(i/255.0,Gamma/100.0)*gain/100.0));
+            table[i]=(byte)Math.Min(255,Math.Round(255*Math.Pow(i/255.0,Gamma/100.0)*Brightness*gain/10000.0));
         return table;
     }
     public void Apply(byte[] rgb)
     {
-        if(redCurve==null || (Black==0 && Gamma==100 && Red==100 && Green==100 && Blue==100 && Saturation==100))return;
+        if(redCurve==null || (Black==0 && Brightness==100 && Gamma==100 && Red==100 && Green==100 && Blue==100 && Saturation==100))return;
         for(int i=0;i<rgb.Length;i+=3){
             int r=rgb[i],g=rgb[i+1],b=rgb[i+2];
             if(Math.Max(r,Math.Max(g,b))<=Black) {rgb[i]=rgb[i+1]=rgb[i+2]=0;continue;}
