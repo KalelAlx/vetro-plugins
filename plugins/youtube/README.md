@@ -44,6 +44,10 @@ app_launcher -s com.samsung.tv.cobalt-yt -u 5001 USERDATA ' --base_url=https://w
 - **The proxy** runs inside Vetro (where: see *Where the proxy listens*). Every host is a plain tunnel except `www.youtube.com`, whose start page
   gets one `<script>` tag. If the certificate or the script is missing, the proxy only tunnels: YouTube then runs unpatched
   instead of breaking.
+- **The app's own requests to the TV.** While it runs, the app sends plain requests to `http://localhost:8080` (the TV's web
+  server), for example to tell the TV which cast session it is. Through the proxy these would fail, and the phone would then
+  list the TV twice while the app is open (one entry that does nothing). So the proxy passes on those requests, and only
+  those: plain HTTP to `localhost` or `127.0.0.1` on port 8080, nothing else.
 - **The certificate.** The plugin makes a certificate authority of its own and adds it to a *copy* of the YouTube app's content
   folder (`/opt/usr/home/owner/share/vyt`, a short path on purpose: see *The Home tile*). Only the YouTube app started by this plugin trusts it. The TV's trust store is never touched, and
   `ca.key` is readable by root only, and `<DIR>` itself belongs to root: the only folder the apps' user can write in is

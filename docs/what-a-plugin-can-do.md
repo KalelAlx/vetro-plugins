@@ -32,7 +32,7 @@ is "what does the API give me, and what will the catalog accept".
 | --- | --- |
 | **Supported** | one page in the dashboard · its own HTTP routes · its own saved settings · timers and sockets while it runs · shell commands as root, with `exec` |
 | **Not offered by the API** | remote-control events · "TV turned on" or "app opened" callbacks · launcher tiles of its own (only `intercepts`, which takes over an app's) · anything drawn on the TV screen but one Control center card · Vetro's settings · the MQTT / Home Assistant link · a second page · running while switched off |
-| **Possible but forbidden by this catalog** | `eval`, `new Function`, minified code, code downloaded at run time, network calls the description does not mention, collecting data about the user, the TV or the network, `exec` without saying which commands |
+| **Possible but forbidden by this catalog** | `eval`, `new Function`, minified code, code downloaded at run time (except a large helper kept in `helpers/` of this repository, see [CONTRIBUTING](../CONTRIBUTING.md#a-helper-too-big-for-the-bundle)), network calls the description does not mention, collecting data about the user, the TV or the network, `exec` without saying which commands |
 
 The three rows are three different things:
 
@@ -87,7 +87,7 @@ once, before the merge. That is a spot check, not an audit.
 - ⚙ `README.md`, `description`, `author` (a real GitHub account) and a `1.2.3` version are present.
 - ⚙ No `eval()` and no `new Function`.
 - ⚙ A Shard that asks for `exec` has a "Commands it runs" section in its README that lists every command and why.
-- No minified or obfuscated source, no downloaded code.
+- No minified or obfuscated source, no downloaded code (except a helper kept in `helpers/`, rebuilt by CI and pinned by SHA-256).
 - It talks only to what the description says. No calls to hosts the description does not mention.
 - No collection of data about the user, the TV or the network.
 - `permissions` is as small as possible. A Shard that does not need `exec` must not ask for it.

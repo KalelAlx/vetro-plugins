@@ -56,17 +56,28 @@
       }
     },
     {
-      "id": "nordvpn",
-      "name": "NordVPN",
-      "version": "1.0.0",
-      "author": "piecifra",
-      "description": "NordVPN (NordLynx/WireGuard) on the TV: country, kill switch, reconnect. Talks to api.nordvpn.com, NordVPN servers and GitHub (its binary).",
+      "id": "keyboard",
+      "name": "Keyboard & Remote",
+      "version": "1.1.0",
+      "author": "abdoghanem2011",
+      "description": "Text input, live MJPEG/1080p screen preview, and full TV remote. Connects browser to TV port 8002 (WSS); streams via 127.0.0.1.",
       "permissions": [
         "exec"
       ],
-      "url": "dist/nordvpn-1.0.0.vplugin",
-      "sha256": "71ebdbc70c9070e0c4c658f43492151903c52f96d927a02b629b6c15654797aa",
-      "size": 62170
+      "url": "dist/keyboard-1.1.0.vplugin",
+      "sha256": "7146f1297f23e0ab56ef9d158c4a73051fa9f0dfdd899640c179fa39f5ceb8c5",
+      "size": 195944
+    },
+    {
+      "id": "notification-center",
+      "name": "Notification Center",
+      "version": "0.3.1",
+      "author": "mclaudiopt",
+      "description": "Show LAN notifications as native TV banners via a companion app. Talks to Vetro on 127.0.0.1:8099 and fetches a sender's image/wallpaper URL only if sent.",
+      "permissions": [],
+      "url": "dist/notification-center-0.3.1.vplugin",
+      "sha256": "4cce53854f29c856523c39c4309f2dbd80c6f5b62fdf8c01a9aa61676d47ee11",
+      "size": 333147
     },
     {
       "id": "prometheus",
@@ -95,13 +106,16 @@
     {
       "id": "sonos-controller",
       "name": "Sonos controller",
-      "version": "0.2.4",
+      "version": "0.3.1",
       "author": "genesai",
-      "description": "Remote volume and mute keys control a Sonos room via Vetro's MQTT rules. Uses Sonos on your LAN (port 1400, SSDP) and reads Vetro's settings. No cloud.",
+      "description": "Remote volume and mute keys control Sonos via Vetro's MQTT rules, plus a Control center card for rooms. LAN only (port 1400, SSDP); reads Vetro's settings.",
       "permissions": [],
-      "url": "dist/sonos-controller-0.2.4.vplugin",
-      "sha256": "b37f0c3d90815ad992ae17af6ca600cfd8486a6b6cdc27058f1bf115bb5121d4",
-      "size": 104417
+      "url": "dist/sonos-controller-0.3.1.vplugin",
+      "sha256": "b7c5e5f95b255630b17d17d768e9e3e2b94ce0246ba7316879d5686900c127b8",
+      "size": 170156,
+      "controlCenter": {
+        "label": "Sonos"
+      }
     },
     {
       "id": "ssh-server",
@@ -158,15 +172,15 @@
     {
       "id": "youtube",
       "name": "Ad-free YouTube",
-      "version": "0.4.1",
+      "version": "0.4.2",
       "author": "andrearicci93",
       "description": "Samsung's own YouTube with ads blocked, Shorts hidden and sponsors skipped (TizenTube). Local proxy; fetches one pinned script from cdn.jsdelivr.net.",
       "permissions": [
         "exec"
       ],
-      "url": "dist/youtube-0.4.1.vplugin",
-      "sha256": "ccbf4fb3bfb4f025682b197db734d6f7a8965ec4bb71d7a743ed1564f1018389",
-      "size": 92998,
+      "url": "dist/youtube-0.4.2.vplugin",
+      "sha256": "8fedd4d490cd5b5517e22b835d97f58d8027d4c0512eb4aa3c8e97ed59ea58a0",
+      "size": 95441,
       "intercepts": [
         {
           "appId": "com.samsung.tv.cobalt-yt",

@@ -98,6 +98,13 @@ function describeTrigger(t) {
 function analyze(data, cfg, wanted) {
     var items = [], codes = {}, physicalCodes = [];
 
+    // Whether remote interception is running now: the keys reach Vetro only then. Read before the rules,
+    // because whether Vetro UI's Volume bar takes a key (section 2) depends on it.
+    var inputStatus = data.input.ok && data.input.body && data.input.body.status || {};
+    var inputPolicy = inputStatus.policy || {};
+    var remapInterception = data.remap.ok && data.remap.body && data.remap.body.interception || {};
+    var intercepting = inputPolicy.mode === 'filter' && inputPolicy.connected === true && !remapInterception.problem;
+
     // 1. MQTT link.
     if (!data.mqtt.ok) items.push(item('bad', 'Could not read Vetro’s MQTT settings', data.mqtt.error));
     else {
@@ -144,6 +151,30 @@ function analyze(data, cfg, wanted) {
         wanted.forEach(function (w) {
             if (w.required && !used[w.topic]) items.push(item('bad', 'No rule for ' + w.key, 'Add a rule: trigger type “Physical key”, the key’s code, action “Publish MQTT message” to ' + w.topic + '.'));
         });
+
+        // Vetro 0.7.0 and later: keys that Vetro UI holds for itself ("reserved", e.g. its Volume bar on 68, 67 and 66). While
+        // remote interception runs, Vetro hands such a key to its own launcher before looking at rules, so a rule on it never
+        // runs. "live" is false while Vetro's launcher is off, and then the key goes to the rules. "live" says nothing about
+        // interception: while interception is off or failing, every key goes to Samsung, the Volume bar takes nothing yet, and
+        // the interception item below is the one to act on. Older Vetro versions send no "reserved" list.
+        var reserved = Array.isArray(data.remap.body.reserved) ? data.remap.body.reserved : [];
+        var taken = [], waiting = [], owner = 'Vetro UI';
+        reserved.forEach(function (k) {
+            if (!k || physicalCodes.indexOf(String(k.code)) < 0) return;
+            var what = 'key ' + k.code + (k.label ? ' (' + k.label + ')' : '');
+            if (k.name) owner = 'Vetro’s ' + k.name;
+            if (k.live === false || !intercepting) waiting.push(what); else taken.push(what);
+        });
+        var fix = 'Switch off the Volume bar in Vetro UI → On-screen displays.';
+        if (taken.length) {
+            items.push(item('bad', owner + ' takes ' + taken.join(', '),
+                'Vetro sends these keys to its own on-screen display, so the rules for them never run. ' + fix));
+        }
+        if (waiting.length) {
+            items.push(item('warn', owner + ' is on and will take ' + waiting.join(', '),
+                (intercepting ? 'The keys reach this Shard while Vetro’s launcher is off. Once it is on' : 'Not yet: remote interception is not running (see below). Once it runs') +
+                ', Vetro sends them to its own on-screen display instead of the rules. ' + fix));
+        }
     }
 
     // 3. Remote interception.
@@ -186,6 +217,10 @@ function analyze(data, cfg, wanted) {
             else items.push(item('ok', 'Remote interception is running', (policy.device || '') + (blocked.length ? ' · keys ' + blocked.join(', ') : '')));
             var passed = keys.filter(function (k) { return k.mode === 'filter' && k.decision === 'native' && physicalCodes.indexOf(String(k.code)) >= 0; });
             if (passed.length) items.push(item('warn', 'Key ' + passed[0].code + ' went to the TV', 'Pressed before interception included it, or by another remote.'));
+        }
+        // Vetro 0.7.0: Vetro UI turns interception on by itself for its Volume bar, and says here when it could not.
+        if (remapInterception.problem) {
+            items.push(item('warn', 'Vetro UI could not turn on remote interception', 'Vetro says: ' + remapInterception.problem));
         }
         if (pref.enabled && pref.device && policy.device && pref.device !== policy.device && policy.mode === 'filter') {
             items.push(item('warn', 'Interception runs on ' + policy.device, 'The saved remote is ' + pref.device + '.'));

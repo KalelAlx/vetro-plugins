@@ -1,0 +1,15 @@
+{
+  "id": "usb-ethernet",
+  "name": "USB Ethernet",
+  "version": "1.1.0",
+  "apiVersion": 1,
+  "permissions": [
+    "exec"
+  ],
+  "author": "andrearicci93",
+  "description": "Gives a USB Ethernet adapter (Realtek RTL8152/8153/8156 and branded ones) a driver and makes it the TV's wired connection after each restart. No network use.",
+  "main": "index.js",
+  "ui": {
+    "label": "USB Ethernet"
+  }
+}
