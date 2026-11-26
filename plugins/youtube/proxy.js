@@ -21,7 +21,7 @@ var CONNECT_MS = 20 * 1000;            // time allowed to reach a host
 
 // opts: host, port, allow(remoteAddress) -> boolean (optional), log(msg), leaf() -> {key, cert} | null, script() -> {body, version} | null, onPage({injected, bytes}), maxConnections
 function createProxy(opts) {
-    var server = null, ready = false, tlsServer = null, httpServer = null, leafCert = null, tunnels = 0, opened = 0, live = 0, refused = 0, accepted = 0, foreign = 0, loggedFirst = false, loggedOdd = false;
+    var server = null, ready = false, tlsServer = null, httpServer = null, leafCert = null, tunnels = 0, opened = 0, live = 0, relayed = 0, refused = 0, accepted = 0, foreign = 0, loggedFirst = false, loggedOdd = false;
     var socks = {}, nextId = 1, waiters = [];                // every open socket, so that close(true) can end them
     var cap = opts.maxConnections || MAX_CONNECTIONS;
 
@@ -128,12 +128,42 @@ function createProxy(opts) {
             c.removeListener('data', onData);
             c.pause();
             var rest = buf.slice(end + 4);
-            connect(c, buf.slice(0, end).toString('binary').split('\r\n')[0], rest);
+            var head = buf.slice(0, end).toString('binary');
+            connect(c, head.split('\r\n')[0], rest, head);
         }));
     }
 
-    function connect(c, line, rest) {
+    // The YouTube app also sends plain requests to the TV's own web server through the proxy (it posts the cast data to
+    // http://localhost:8080/ws/apps/YouTube/dial_data, which the phone reads to match the cast target with the app).
+    // Only that server is reachable this way: loopback, port 8080, one request per connection. Anything else is refused.
+    var LOCAL_PORT = opts.localPort || 8080;           // opts.localPort is for tests only
+    function relayLocal(c, head, rest) {
+        var lines = head.split('\r\n');
+        var m = /^([A-Z]{3,7}) http:\/\/(?:localhost|127\.0\.0\.1):(\d{1,5})(\/[^ ]*) HTTP\/1\.[01]$/.exec(lines[0]);
+        if (!m || parseInt(m[2], 10) !== LOCAL_PORT) return false;
+        var kept = lines.slice(1).filter(function (l) { return !/^(proxy-)?connection:/i.test(l); });
+        var out = [m[1] + ' ' + m[3] + ' HTTP/1.1'].concat(kept, ['Connection: close', '', '']).join('\r\n');
+        relayed++;
+        if (relayed === 1) opts.log('relaying the app\u2019s requests to the TV\u2019s web server (port ' + LOCAL_PORT + ')');
+        var up = net.connect(LOCAL_PORT, '127.0.0.1');
+        track(up);
+        up.setTimeout(CONNECT_MS, guard(function () { if (!up.connecting) return; drop(up); drop(c); }));
+        up.on('connect', guard(function () {
+            up.setTimeout(IDLE_MS, function () { drop(up); });
+            up.write(out, 'binary');
+            if (rest.length) up.write(rest);
+            c.pipe(up); up.pipe(c);
+            c.resume();
+        }));
+        up.on('error', function () { try { c.end('HTTP/1.1 502 Bad Gateway\r\nconnection: close\r\ncontent-length: 0\r\n\r\n'); } catch (e) { drop(c); } });
+        c.on('close', function () { drop(up); });
+        up.on('close', function () { c.end(); });
+        return true;
+    }
+
+    function connect(c, line, rest, head) {
         var m = /^CONNECT ([^ :\[\]]+):(\d{1,5}) HTTP\/1\.[01]$/.exec(line);
+        if (!m && head && relayLocal(c, head, rest)) return;
         if (!m) { if (!loggedOdd) { loggedOdd = true; opts.log('not a CONNECT request: ' + line.slice(0, 60)); } c.end('HTTP/1.1 502 Bad Gateway\r\nconnection: close\r\ncontent-length: 0\r\n\r\n'); return; }
         var host = m[1].toLowerCase(), port = parseInt(m[2], 10);
         if (port < 1 || port > 65535) { c.end('HTTP/1.1 400 Bad Request\r\nconnection: close\r\ncontent-length: 0\r\n\r\n'); return; }
@@ -182,7 +212,7 @@ function createProxy(opts) {
             if (hard) Object.keys(socks).forEach(function (id) { drop(socks[id]); });
         },
         listening: function () { return !!server && ready; },
-        stats: function () { return { tunnels: tunnels, opened: opened, live: live, refused: refused, accepted: accepted, foreign: foreign }; }
+        stats: function () { return { tunnels: tunnels, relayed: relayed, opened: opened, live: live, refused: refused, accepted: accepted, foreign: foreign }; }
     };
 }
 
