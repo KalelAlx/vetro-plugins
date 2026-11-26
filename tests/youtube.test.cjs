@@ -42,6 +42,34 @@ test('proxy refuses peers that are not the TV and counts what arrives',()=>new P
   });
  });
 }));
+test('proxy relays plain requests to the TV web server on loopback only',()=>new Promise((resolve,reject)=>{
+ const seen=[];const web=require('http').createServer((req,res)=>{let b='';req.on('data',d=>b+=d);req.on('end',()=>{seen.push({line:req.method+' '+req.url,conn:req.headers.connection,pconn:req.headers['proxy-connection'],body:b});res.writeHead(200,{'content-length':2});res.end('ok');});});
+ web.listen(0,'127.0.0.1',()=>{
+  const lp=web.address().port,port=40000+Math.floor(Math.random()*20000),logs=[];
+  const q=proxyLib.createProxy({host:'127.0.0.1',port,log:m=>logs.push(m),leaf:()=>null,script:()=>null,localPort:lp});
+  const done=(e)=>{q.close(true);web.close();e?reject(e):resolve();};
+  const ask=(target,cb)=>{let out='';const c=net.connect(port,'127.0.0.1',()=>c.write('POST '+target+' HTTP/1.1\r\nHost: localhost\r\nProxy-Connection: keep-alive\r\nConnection: keep-alive\r\nContent-Length: 5\r\n\r\nhello'));c.on('data',d=>out+=d);c.on('error',()=>{});c.on('close',()=>cb(out));};
+  q.listen(err=>{
+   if(err){web.close();return reject(err);}
+   ask('http://localhost:'+lp+'/ws/apps/YouTube/dial_data',r1=>{
+    try{
+     assert.match(r1,/^HTTP\/1\.1 200 /);assert.equal(seen.length,1);
+     assert.equal(seen[0].line,'POST /ws/apps/YouTube/dial_data');assert.equal(seen[0].body,'hello');
+     assert.equal(String(seen[0].conn).toLowerCase(),'close');assert.equal(seen[0].pconn,undefined);
+     assert.equal(q.stats().relayed,1);assert.ok(logs.some(l=>/relaying/.test(l)));
+    }catch(x){return done(x);}
+    ask('http://localhost:'+(lp+1)+'/x',r2=>{                                  // another port: refused
+     ask('http://example.com:'+lp+'/x',r3=>{                                    // another host: refused
+      ask('http://192.168.1.1:'+lp+'/x',r4=>{
+       try{[r2,r3,r4].forEach(r=>assert.match(r,/^HTTP\/1\.1 502 /));assert.equal(seen.length,1);assert.equal(q.stats().relayed,1);}catch(x){return done(x);}
+       done();
+      });
+     });
+    });
+   });
+  });
+ });
+}));
 test('Open path starts the app with the chosen proxy address',()=>{
  assert.match(setup.launchScript('192.168.1.50',8101),/--proxy=192\.168\.1\.50:8101,direct:\/\/ --content=\/opt\/usr\/home\/owner\/share\/vyt/);
 });
