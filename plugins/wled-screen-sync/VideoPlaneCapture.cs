@@ -206,6 +206,7 @@ namespace TizenAmbilight
 
                 _call = (CaptureVideoMainFn)Marshal.GetDelegateForFunctionPointer(
                             _fn, typeof(CaptureVideoMainFn));
+                if (_cfProbed) Marshal.WriteInt32(_param, OffColorFormat, ChosenColorFormat);
                 return null;
             }
             catch (Exception e)
@@ -315,9 +316,9 @@ namespace TizenAmbilight
         /// iteration). Holding a result across a capture would observe mutating data.</summary>
         public static VideoPlaneResult Capture()
         {
-            // Single diagnostic using the upstream default format.
             var r = new VideoPlaneResult();
             if (_call == null) { r.Rc = -1; r.Error = "not initialised"; return r; }
+            if (!_cfProbed) ProbeColorFormatOnce();
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
             try

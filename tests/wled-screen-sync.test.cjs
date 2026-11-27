@@ -27,6 +27,18 @@ test('WLED helper has platform and 32-bit native guards', () => {
     assert.match(plane,/IntPtr\.Size != 4/);
 });
 
+test('video color format is probed before capture and retained after reset', () => {
+    const plane = fs.readFileSync(path.join(root,'plugins/wled-screen-sync/VideoPlaneCapture.cs'),'utf8');
+    const init = plane.indexOf('public static string Init()');
+    const initEnd = plane.indexOf('public static string Reset()',init);
+    const capture = plane.indexOf('public static VideoPlaneResult Capture()');
+    const probe = plane.indexOf('if (!_cfProbed) ProbeColorFormatOnce();',capture);
+    const nativeCapture = plane.indexOf('r.Rc = _call(ReqW, ReqH, _param);',capture);
+    assert(init>=0 && initEnd>init && capture>initEnd);
+    assert.match(plane.slice(init,initEnd),/if \(_cfProbed\) Marshal\.WriteInt32\(_param, OffColorFormat, ChosenColorFormat\);/);
+    assert(probe>capture && probe<nativeCapture);
+});
+
 const http = require('node:http');
 const events = require('node:events');
 const os = require('node:os');
