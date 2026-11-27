@@ -215,16 +215,17 @@ module.exports = function(ctx) {
             return queue(stopUnit).catch(function(e){stopFailed(startEpoch,e);});
         });
     },stop:function(){
-        var generation=++epoch;
+        var generation=++epoch, helperStopped=false;
         active=false;captureEnabled=false;clearInterval(timer);clearInterval(hdrTimer);timer=null;hdrTimer=null;
         settingsRoute.pause();
         clearHeartbeat();clearRuntime();
         detail={stdout:'Capture stopping',state:'stopping'};
         return queue(stopUnit).then(function(){
             if(generation!==epoch)return;
+            helperStopped=true;
             clearRuntime();detail={stdout:'Capture stopped',state:'stopped'};
         },function(e){stopFailed(generation,e);}).then(function(){
-            if(generation!==epoch)return;
+            if(generation!==epoch || !helperStopped)return;
             return settingsRoute.stop().catch(function(e){
                 if(generation!==epoch)return;
                 if(detail.state==='stop-failed')detail.stdout+='; WLED power restore pending: '+e.message;

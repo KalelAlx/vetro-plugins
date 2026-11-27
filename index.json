@@ -157,6 +157,32 @@
       "size": 2885
     },
     {
+      "id": "usb-ethernet",
+      "name": "USB Ethernet",
+      "version": "1.1.0",
+      "author": "andrearicci93",
+      "description": "Gives a USB Ethernet adapter (Realtek RTL8152/8153/8156 and branded ones) a driver and makes it the TV's wired connection after each restart. No network use.",
+      "permissions": [
+        "exec"
+      ],
+      "url": "dist/usb-ethernet-1.1.0.vplugin",
+      "sha256": "7563007c1d3a21a4579a73639f0776864d6f9affce3fcb2a81ff48634a91045c",
+      "size": 37774
+    },
+    {
+      "id": "vpn",
+      "name": "VPN",
+      "version": "1.1.1",
+      "author": "piecifra",
+      "description": "WireGuard VPN on the TV: NordVPN, or your own configs from any provider or server. Kill switch, split tunnel. Talks to api.nordvpn.com, your VPN and GitHub.",
+      "permissions": [
+        "exec"
+      ],
+      "url": "dist/vpn-1.1.1.vplugin",
+      "sha256": "e185e7c62f2b628fa2366de2b2e5b7307b78a4fb0d569824f6c77b4c0241ae5f",
+      "size": 141552
+    },
+    {
       "id": "wled-screen-sync",
       "name": "Ambilight Studio",
       "version": "0.9.7",
