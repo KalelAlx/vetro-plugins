@@ -93,6 +93,22 @@ module.exports = function(ctx) {
         }
         readHdr();
     }
+    function validationFailed(generation,error){
+        if(generation!==epoch)return;
+        captureEnabled=false;
+        clearHeartbeat();clearRuntime();
+        detail={stdout:'WLED controller validation failed: '+error.message+'. Press Start to retry.',state:'failed'};
+    }
+    function startAfterValidation(generation){
+        return settingsRoute.start().then(function(){
+            if(!active || generation!==epoch)return;
+            resetBudget();
+            captureEnabled=true;
+            if(hasTarget()){tickRuntime();return check(true);}
+            clearHeartbeat();clearRuntime();detail={stdout:'Select a private IPv4 WLED target',state:'waiting'};
+            return queue(stopUnit).catch(function(e){stopFailed(generation,e);});
+        },function(error){validationFailed(generation,error);});
+    }
     function check(force){
         if((!force && busy) || !shouldRun() || Date.now()<nextCheck)return checks;
         busy=true;
@@ -176,20 +192,19 @@ module.exports = function(ctx) {
                 } else if(action==='start' || action==='restart'){
                     if(!active || !hasTarget())throw Error('Enable the Shard and select a WLED target first');
                     var generation=++epoch;
+                    captureEnabled=false;clearHeartbeat();clearRuntime();
                     if(action==='restart'){
-                        captureEnabled=false;clearHeartbeat();clearRuntime();
                         detail={stdout:'Capture stopping',state:'stopping'};
-                    }
+                    } else detail={stdout:'Validating WLED controller',state:'checking'};
                     queue(function(){if(action==='restart' && generation===epoch)return stopUnit();}).then(function(){
                         if(generation!==epoch)return;
                         if(action==='restart'){
                             fs.writeFileSync(recoveryFile+'.tmp',String(Date.now()+8000));
                             fs.renameSync(recoveryFile+'.tmp',recoveryFile);
                         }
-                        captureEnabled=true;resetBudget();tickRuntime();
-                        return check(true);
+                        return startAfterValidation(generation);
                     }).then(function(){
-                        json(res,{ok:generation===epoch && !failures && detail.state!=='checking',state:detail.state||'active'});
+                        json(res,{ok:generation===epoch && captureEnabled && !failures && detail.state!=='checking',state:detail.state||'active'});
                     },function(e){stopFailed(generation,e);json(res,{error:e.message},500);});
                 } else throw Error('Unknown capture action');
             } catch(e){json(res,{error:e.message},400);}
@@ -204,16 +219,9 @@ module.exports = function(ctx) {
         var startEpoch=++epoch;
         active=true;captureEnabled=false;resetBudget();
         clearInterval(timer);clearInterval(hdrTimer);timer=null;hdrTimer=null;
+        clearHeartbeat();clearRuntime();
         hdrTimer=setInterval(tickRuntime,2000);timer=setInterval(check,5000);
-        return settingsRoute.start().catch(function(e){
-            if(startEpoch===epoch)detail={stdout:e.message};
-        }).then(function(){
-            if(!active || startEpoch!==epoch)return;
-            captureEnabled=true;
-            if(hasTarget()){tickRuntime();return check(true);}
-            clearHeartbeat();clearRuntime();detail={stdout:'Select a private IPv4 WLED target',state:'waiting'};
-            return queue(stopUnit).catch(function(e){stopFailed(startEpoch,e);});
-        });
+        return startAfterValidation(startEpoch);
     },stop:function(){
         var generation=++epoch, helperStopped=false;
         active=false;captureEnabled=false;clearInterval(timer);clearInterval(hdrTimer);timer=null;hdrTimer=null;

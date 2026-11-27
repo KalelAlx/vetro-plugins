@@ -111,6 +111,31 @@ test('a launch acknowledgement does not reset the five-start crash budget',async
     await shard.stop();
 });
 
+test('WLED validation failure keeps capture stopped and Start validates again before launch',async t=>{
+    const address='192.168.2.1', h=harness(t,{Wled:address});
+    h.rejectInfo(address);
+    const shard=require('../plugins/wled-screen-sync')(h.ctx);
+    t.after(()=>shard.stop());
+    await shard.start();
+    assert.equal(shard.status().state,'failed');
+    assert.match(shard.status().stdout,/Press Start to retry/);
+    assert(!h.commands.some(command=>command.includes('systemd-run')));
+    assert(!fs.existsSync(path.join(h.ctx.dir,'runtime','capture-heartbeat')));
+
+    let checks=h.requests.filter(request=>request.path==='/json/info').length;
+    const refused=await routeCall(shard.route,'POST','capture-action',{action:'start'});
+    assert.equal(refused.body.ok,false);
+    assert(h.requests.filter(request=>request.path==='/json/info').length>checks);
+    assert(!h.commands.some(command=>command.includes('systemd-run')));
+
+    h.rejectInfo(null);
+    checks=h.requests.filter(request=>request.path==='/json/info').length;
+    const started=await routeCall(shard.route,'POST','capture-action',{action:'start'});
+    assert.equal(started.body.ok,true);
+    assert(h.requests.filter(request=>request.path==='/json/info').length>checks);
+    assert(h.commands.some(command=>command.includes('systemd-run')));
+});
+
 test('loopback target does not start the helper or poll HDR',async t=>{
     const h=harness(t,{Wled:'127.0.0.1'});
     const shard=require('../plugins/wled-screen-sync')(h.ctx);
