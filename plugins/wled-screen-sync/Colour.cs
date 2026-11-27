@@ -569,6 +569,8 @@ internal static class WledAmbiPpi
     private static bool WantsPicture(Tuning config) { return config.Lighting == "screen" || config.Lighting == "screen-audio"; }
 
     private static volatile bool samplerUnavailable;
+    private static volatile bool pictureFrameReady;
+    private static volatile string samplerFailure;
     private static void Capture(Func<bool> wanted)
     {
         bool ppiAvailable = PpiVeInit();
@@ -653,6 +655,8 @@ internal static class WledAmbiPpi
             {
                 longestReadMs = Math.Max(longestReadMs, uptime.Elapsed.TotalMilliseconds - started);
                 if (full) {
+                    pictureFrameReady = true;
+                    samplerFailure = null;
                     consecutiveFailures = 0; fallbackInitialized = false;
                     if(pictureRecoveryUntil!=0) {
                         pictureRecoveryUntil=0;
@@ -677,10 +681,21 @@ internal static class WledAmbiPpi
                 }
             }
             bool pictureRecovery = pictureRecoveryUntil > DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            if (ppiAvailable && !full && !pictureRecovery && (samplerOnly || !available || consecutiveFailures >= 3))
+            bool sampled = false;
+            if (ppiAvailable && !full && (samplerOnly || (!pictureRecovery && (!available || consecutiveFailures >= 3))))
             {
-                try { PpiVeFrame(); }
-                catch (InvalidOperationException) { fallbackErrors++; }
+                try { PpiVeFrame(); sampled=true; }
+                catch (InvalidOperationException e) {
+                    fallbackErrors++;
+                    pictureFrameReady=false;
+                    samplerFailure="TV color sampler failed: "+e.Message;
+                }
+                if(sampled) { pictureFrameReady=true; samplerFailure=null; }
+            }
+            else if(samplerOnly && !ppiAvailable)
+            {
+                pictureFrameReady=false;
+                samplerFailure="TV color sampler unavailable: API unsupported";
             }
             bool difference = false;
             var colors = latest.Colors;
@@ -705,7 +720,8 @@ internal static class WledAmbiPpi
             if (!samplerOnly) status += String.Format(", requested {0}x{1}", TizenAmbilight.VideoPlaneCapture.ReqW, TizenAmbilight.VideoPlaneCapture.ReqH);
             status += ", WLED " + tuning.Wled;
             status += ", TV input " + (haveSource ? sourceType.ToString() : "unknown") + ", capture reopens " + nativeReopens;
-            status += full ? (hdr ? ", HDR10 PQ BT.2020" : ", SDR BT.709") : pictureRecovery ? ", trying full-picture recovery" : ", TV sampled RGB";
+            if(samplerFailure!=null) status += ", " + samplerFailure + ", output suspended until a fresh frame";
+            else status += full ? (hdr ? ", HDR10 PQ BT.2020" : ", SDR BT.709") : pictureRecovery ? ", trying full-picture recovery" : ", TV sampled RGB";
             status += ", saturation " + tuning.Saturation + "%, smoothing " + tuning.Smooth + " ms, sampling " + tuning.SampleMode;
             if (inputChroma > 0) status += String.Format(", zone chroma cancellation {0:F1}%",100*(1-averagedChroma/inputChroma));
             if (tuning.Lighting == "screen-audio") status += ", " + TvAudioCapture.Status(tuning);
@@ -891,7 +907,8 @@ internal static class WledAmbiPpi
                 try {
                     bool previewDue = now >= nextPreview;
                     byte[] preview = previewDue ? new byte[48 * 3] : null;
-                    if (config.Wled != "127.0.0.1")
+                    bool pictureReadyForOutput = !WantsPicture(config) || pictureFrameReady;
+                    if (config.Wled != "127.0.0.1" && pictureReadyForOutput)
                     {
                         if (endpoint == null || destination != config.Wled || endpoint.Port != port)
                         {
@@ -915,7 +932,7 @@ internal static class WledAmbiPpi
                     }
                     if (previewDue) {
                         nextPreview = now + 1000;
-                        WritePreview(Convert.ToBase64String(preview));
+                        WritePreview(pictureReadyForOutput ? Convert.ToBase64String(preview) : "");
                     }
                 }
                 catch (SocketException) { System.Threading.Interlocked.Increment(ref udpErrors); }

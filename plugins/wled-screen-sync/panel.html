@@ -203,7 +203,10 @@ function live(){
   var bytes=text.match(/audio bytes (\d+)/);
   if(bytes){var mb=Number(bytes[1])/1048576;el('audioBytes').textContent=(mb<1?'<1':mb.toFixed(1))+' MB';}
   else el('audioBytes').textContent='—';
-  el('status').textContent=saved.Lighting==='tv-audio'?'TV audio sync':saved.Lighting==='screen-audio'?'Screen + TV audio':saved.Lighting==='screen'?(text.indexOf('TV sampled RGB')>=0?'TV color sampler':text.indexOf('HDR10 PQ')>=0?'Full picture · HDR':text.indexOf('SDR BT.709')>=0?'Full picture · SDR':'Screen sync'):'Effect active';
+  var samplerFailure=text.match(/TV color sampler (?:failed|unavailable): [^,]+/);
+  el('status').textContent=data.state==='failed'?(text||'Capture failed. Press Start to retry.'):
+   samplerFailure?samplerFailure[0]+' · output suspended':
+   saved.Lighting==='tv-audio'?'TV audio sync':saved.Lighting==='screen-audio'?'Screen + TV audio':saved.Lighting==='screen'?(text.indexOf('TV sampled RGB')>=0?'TV color sampler':text.indexOf('HDR10 PQ')>=0?'Full picture · HDR':text.indexOf('SDR BT.709')>=0?'Full picture · SDR':'Screen sync'):'Effect active';
  }).catch(function(){showResolution('');el('status').textContent='Capture status unavailable';});
 }
 function preview(){
